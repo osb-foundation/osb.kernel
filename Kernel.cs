@@ -60,6 +60,10 @@ namespace Osb.Kernel
 
         Environment.Init();     // session environment (PATH, PROMPT, USER, ...)
 
+        // Load the user database (PASSWD/SUDOERS) kernel-side at boot (1c, I1;
+        // MIGRATION A1 fixes X13: this used to live in the unreachable Shell.Run).
+        Users.Init();
+
         // Hand control to the userspace shell. The boot program is
         // SHELL.EXE by default (H-B). Only WITH_TESTS=1 builds (BOOT_FROM_CONF)
         // honor A:\OSB\CONF/BOOT so golden cases can boot a test program.
@@ -93,6 +97,9 @@ namespace Osb.Kernel
             Vga.WriteLine("Failed to launch boot program. Halting.");
             while (true) { NativeMethods.hlt_cpu(); }
         }
+        // The boot program is the session leader of a fresh session that starts
+        // with no uid; it must LOGIN before doing anything privileged (1c, I3).
+        Scheduler.BeginFirstSession(pid);
         Scheduler.WaitFor(pid);
         // If the boot program exits, halt the system.
         Vga.WriteLine("Boot program exited. Halting.");

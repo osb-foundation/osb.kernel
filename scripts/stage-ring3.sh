@@ -50,7 +50,7 @@ stage_ring3() {
     # Ring-3 ABI test programs (run from the shell; see osb.shell/tests/progs).
     # Gated behind WITH_TESTS=1 so the default image ships only SHELL.EXE.
     if [[ "${WITH_TESTS:-0}" == "1" ]]; then
-        for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr; do
+        for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr TQuiet TId TSpin TLogout TSudo; do
             compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
         done
         # 26-spawnerr EACCES proof: a valid OSBEXE with mode 0100644 (no x bit)
@@ -60,6 +60,13 @@ stage_ring3() {
         dbg debugfs -w -R "write $OBJ/TNX.dump /OSB/BIN/TNX.EXE" "$OUT_IMG"
         dbg debugfs -w -R "sif /OSB/BIN/TNX.EXE mode 0100644" "$OUT_IMG"
         echo "  staged /OSB/BIN/TNX.EXE (mode 0100644, non-exec)"
+        # 1c identity EACCES proof: a root-owned 0700 file (a silent TQuiet
+        # copy). A non-root spawn must be refused with -3; a root (sudo) spawn
+        # runs it silently.
+        dbg debugfs -w -R "dump /OSB/BIN/TQuiet.EXE $OBJ/ROOTONLY.dump" "$OUT_IMG"
+        dbg debugfs -w -R "write $OBJ/ROOTONLY.dump /OSB/BIN/ROOTONLY.EXE" "$OUT_IMG"
+        dbg debugfs -w -R "sif /OSB/BIN/ROOTONLY.EXE mode 0100700" "$OUT_IMG"
+        echo "  staged /OSB/BIN/ROOTONLY.EXE (mode 0100700, root-only exec)"
     fi
 
     run e2fsck -fy "$OUT_IMG"

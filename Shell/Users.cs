@@ -25,8 +25,8 @@ internal static unsafe class Users
 {
     public const int MaxUsers = 24;
     public const int NameCap = 16;
-    private const int PassCap = 32;
-    private const int HomeCap = 64;
+    public const int PassCap = 32;
+    public const int HomeCap = 64;
 
     private unsafe struct UserTable
     {
@@ -185,11 +185,34 @@ internal static unsafe class Users
 
     public static bool PassMatches(int idx, char* pass, int passLen)
     {
-        if (idx < 0) return false;
-        if (_users.passLens[idx] != passLen) return false;
-        for (int k = 0; k < passLen; k++)
-            if (_users.passes[idx * PassCap + k] != pass[k]) return false;
-        return true;
+        // Constant-time (1c, I1): always scans PassCap bytes and never exits
+        // early on a mismatch, so a wrong password and a short/long password
+        // take the same time. The length difference is folded into `diff`.
+        int storedLen = (idx >= 0 && idx < _users.count) ? _users.passLens[idx] : 0;
+        int diff = (storedLen != passLen) ? 1 : 0;
+        int n = passLen < PassCap ? passLen : PassCap;
+        for (int k = 0; k < PassCap; k++)
+        {
+            char a = (idx >= 0 && idx < _users.count && k < storedLen)
+                ? _users.passes[idx * PassCap + k] : (char)0;
+            char b = (k < n) ? pass[k] : (char)0;
+            diff |= (a != b) ? 1 : 0;
+        }
+        return diff == 0;
+    }
+
+    // Table index of the user with this uid, or -1 (1c: uid -> sudoers check).
+    public static int IndexOfUid(uint uid)
+    {
+        for (int i = 0; i < _users.count; i++)
+            if ((uint)_users.uids[i] == uid) return i;
+        return -1;
+    }
+
+    public static bool IsSudoerByUid(uint uid)
+    {
+        int i = IndexOfUid(uid);
+        return i >= 0 && _users.sudoers[i] != 0;
     }
 
     public static bool IsSudoerAt(int idx) => _users.sudoers[idx] != 0;

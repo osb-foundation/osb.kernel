@@ -13,9 +13,8 @@ internal static unsafe partial class Syscalls
 {
     // ABI version reported by GETABI (AH=82h). Bump when this table or its
     // conventions change incompatibly; osbkt checks it at startup
-    // (osbkt/docs/ABI.md). v3 (phase 1c): 6Ah/20h are byte strings (B1), not
-    // UTF-16 chars, so the v2->v3 wire-format change must be visible to callers.
-    public const int AbiVersion = 3;
+    // (osbkt/docs/ABI.md). v4 (phase 1c): session identity (65h-69h).
+    public const int AbiVersion = 4;
 
     public static void Handle(ulong* frame)
     {
@@ -28,6 +27,9 @@ internal static unsafe partial class Syscalls
 
         // Graphics + input services (XWIN) live in their own partial.
         if (SyscallGfx.Handle(func, frame)) return;
+
+        // Session identity (65h-69h) lives in its own partial (I2).
+        if (func >= 0x65 && func <= 0x69) { HandleIdentity((int)func, frame); return; }
 
         if (func == 0x09) // print '$'-terminated string at RSI
         {
@@ -367,11 +369,11 @@ internal static unsafe partial class Syscalls
     {
         int perm = mode & 0x1FF;                    // low 9 bits = rwx
         int uid = Scheduler.CurrentUid();
-        int gid = 0;                                // phase 1b: no group layer
-        bool x;
-        if ((uint)uid == fileUid) x = (perm & 0x40) != 0;    // owner x (bit 6, 0100)
-        else if (gid == (int)fileGid) x = (perm & 0x08) != 0; // group x (bit 3, 0010)
-        else x = (perm & 0x01) != 0;               // other x (bit 0, 0001)
-        return x;
+        // Root (uid 0) passes if ANY execute bit is set (owner/group/other).
+        if (uid == 0) return (perm & 0x49) != 0;
+        int gid = Scheduler.CurrentGid();
+        if ((uint)uid == fileUid) return (perm & 0x40) != 0;    // owner x (0100)
+        if ((uint)gid == fileGid) return (perm & 0x08) != 0;    // group x (0010)
+        return (perm & 0x01) != 0;               // other x (0001)
     }
 }

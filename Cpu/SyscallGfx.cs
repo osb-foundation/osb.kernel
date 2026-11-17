@@ -32,6 +32,7 @@
 using Osb.Kernel.Graphics;
 using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
+using Osb.Kernel.Processes;
 
 namespace Osb.Kernel.Cpu;
 
@@ -155,12 +156,14 @@ internal static unsafe class SyscallGfx
                 frame[14] = Keyboard.IsCtrlPressed ? 1UL : 0UL;
                 return true;
 
-            case 0x58: // POWEROFF -> ACPI S5 (QEMU exits); never returns
+            case 0x58: // POWEROFF -> ACPI S5 (QEMU exits); never returns. root only (I3).
+                if (Scheduler.CurrentUid() != 0) { frame[14] = unchecked((ulong)-3); return true; } // EACCES
                 NativeMethods.osb_poweroff();
                 frame[14] = 0;
                 return true;
 
-            case 0x59: // REBOOT -> 8042 reset pulse; never returns
+            case 0x59: // REBOOT -> 8042 reset pulse; never returns. root only (I3).
+                if (Scheduler.CurrentUid() != 0) { frame[14] = unchecked((ulong)-3); return true; } // EACCES
                 NativeMethods.osb_reboot();
                 frame[14] = 0;
                 return true;

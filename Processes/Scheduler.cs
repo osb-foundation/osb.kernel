@@ -60,6 +60,10 @@ internal static unsafe partial class Scheduler
         public fixed ulong deadline[Count];       // demo: next print tick
         public fixed byte name[Count * Layout.MaxName];
         public fixed byte args[Count * ArgsCap];  // external programs: argument string
+        public fixed int sessionId[Count];        // 0 = kernel task; else user session id
+        public fixed int uid[Count];              // effective uid (0 = root, -1 = none)
+        public fixed int realUid[Count];          // session user's real uid (fixed on sudo)
+        public fixed int gid[Count];              // group id
     }
 
     private unsafe struct StackPool { public fixed byte bytes[Count * Layout.StackSize]; }
@@ -98,12 +102,20 @@ internal static unsafe partial class Scheduler
             _tasks.cr3[i] = AddressSpace.Master;
             _tasks.ublock[i] = 0;
             _tasks.ptphys[i] = 0;
+            _tasks.sessionId[i] = 0;
+            _tasks.uid[i] = 0;
+            _tasks.realUid[i] = 0;
+            _tasks.gid[i] = 0;
         }
         // Slot 0 is the shell/console, running on the boot stack in the kernel
         // address space. Its saved SP is captured by the first osb_switch out.
         _tasks.state[Console] = Layout.TaskReady;
         _tasks.kind[Console] = Layout.KindShell;
         _tasks.pid[Console] = 1;
+        _tasks.sessionId[Console] = 0;   // kernel task (session 0)
+        _tasks.uid[Console] = 0;         // root
+        _tasks.realUid[Console] = 0;
+        _tasks.gid[Console] = 0;
         SetName(Console, "CONSOLE");
         _current = Console;
         _nextPid = 2;
@@ -132,11 +144,13 @@ internal static unsafe partial class Scheduler
     public static bool IsReady(int slot) { return _tasks.state[slot] == Layout.TaskReady; }
     public static bool IsZombie(int slot) { return _tasks.state[slot] == Layout.TaskZombie; }
 
-    // The uid of the task currently running (phase 1b: always 0 — the console
-    // runs as root and there is no session/credential layer yet). 1c wires the
-    // real session uid; every permission check goes through this helper so the
-    // 1c change is one place, not a scattered Pid==1 hack.
-    public static int CurrentUid() { return 0; }
+    // The effective uid of the task currently running (1c: the real session
+    // uid, not a hardcoded 0). Every permission check goes through this
+    // helper so the credential source is one place, not a scattered Pid==1 hack.
+    public static int CurrentUid() { return _tasks.uid[_current]; }
+
+    // Group id of the task currently running (used by the 6Ah exec check).
+    public static int CurrentGid() { return _tasks.gid[_current]; }
 
     // Find a live (ready) or zombie slot by pid; false if unknown.
     public static bool TryFindPid(int pid, out int slot)
@@ -229,6 +243,10 @@ internal static unsafe partial class Scheduler
         _tasks.sp[slot] = sp;
         _tasks.pid[slot] = _nextPid++;
         _tasks.ppid[slot] = _tasks.pid[_current];
+        _tasks.sessionId[slot] = _tasks.sessionId[_current];   // inherit session
+        _tasks.realUid[slot] = _tasks.realUid[_current];       // inherit real uid
+        _tasks.uid[slot] = _tasks.uid[_current];               // inherit effective uid
+        _tasks.gid[slot] = _tasks.gid[_current];               // inherit gid
         _tasks.state[slot] = Layout.TaskReady;
         _tasks.kind[slot] = kind;
         _tasks.fg[slot] = 0;

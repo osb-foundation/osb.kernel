@@ -1,288 +1,291 @@
-# Osb.Kernel — o kernel bootável do OSB
+# Osb.Kernel — the bootable kernel of OSB
 
-Primeira versão **bootável** do OSB (reboot do projeto original de 2000 em QBasic),
-escrita em **C# puro freestanding** no estilo do projeto [Cosmos](https://github.com/CosmosOS/Cosmos):
-sem sistema operacional hospedeiro, sem framework externo — compilada com **NativeAOT**
-(sem runtime, sem BCL) e um **bootloader próprio Multiboot2**.
+First **bootable** version of OSB (reboot of the original project from 2000 in QBasic),
+written in **pure freestanding C#** in the style of the [Cosmos](https://github.com/CosmosOS/Cosmos) project:
+no host operating system, no external framework — compiled with **NativeAOT**
+(no runtime, no BCL) and its own **Multiboot2 bootloader**.
 
-## O que esta versão faz
+## What this version does
 
-- Boota via **GRUB (Multiboot2)** em x86-64 (long mode), a partir de um ISO (BIOS).
-- Kernel C# compilado nativamente com `ilc` (NativeAOT) contra um **mini-CoreLib próprio**
-  (`MiniCoreLib.cs`) — as únicas "bibliotecas" necessárias para o compilador C# funcionar
-  sem um OS.
-- Saída de texto em **VGA text mode** (`0xB8000`) espelhada na **COM1 (serial)**.
-- **IDT (256 gates) + PIC 8259A** remapeado (IRQ0-15 → vetores **0x30-0x3F**): exceções de CPU
-  viram panic legível (vetor + RIP), e o **teclado PS/2 é dirigido por interrupção**
-  (IRQ1 → vetor 0x31, fila circular de scancodes, EOI explícito) — sem polling. O remap
-  para 0x30 deixa o vetor **0x21** livre para a syscall DOS-like `INT 21h`.
-- **Console serial (COM1, IRQ4 → vetor 0x34)**: além do teclado PS/2, a shell também lê
-  caracteres recebidos na serial. Isso torna a sessão **headless** utilizável
-  (`./build.sh run` usa `-serial stdio`): o que você digita no terminal chega à shell.
-  A saída serial usa CRLF.
-- **Timer PIT** (8254, canal 0) a **100 Hz via IRQ0** (vetor 0x30): contador global de ticks,
-  uptime em segundos e os comandos `TICKS`/`SLEEP <segundos>` (espera dirigida por ticks).
-- **Clock RTC** (CMOS, IRQ8 → vetor 0x38): modo 24h + binário, interrupção "update-ended"
-  (~1 Hz) que mantém o relógio de software do kernel; comandos `TIME` e `DATE` exibem
-  hora e data reais.
-- **Agendador round-robin preemptivo** sobre uma **tabela de tarefas** (8 slots): o slot 0 é
-  o **console/shell** (roda na pilha de boot) e os demais são tarefas/processos criados por
-  comandos (`DEMO`, `SPAWN`), cada um com **16 KiB de pilha de kernel** própria. Alternância
-  por **preempção**: o handler do PIT (IRQ0) troca de contexto a cada tick (troca de pilha via
-  `osb_switch`), sem `yield`; slots livres são pulados. O frame do ISR interrompido fica
-  "estacionado" na pilha de cada tarefa até ela ser reescalonada.
-- **Processos com espaço de endereço próprio** (Fatia 2):
-  - **Alocador de frames físico** (bitmap de 4 KiB) sobre a mmap do Multiboot2; pool a partir
-    de `0x200000` até o topo da RAM (aqui 64 MiB; ~15 872 frames). A janela `0x400000-0x5FFFFF`
-    (o `pd[2]` de todo espaço) é reservada. Comando `MEM` mostra uso/faixa.
-  - Cada processo tem `PML4+PDPT+PD` **próprios** (3 frames). O kernel é copiado como mapa de
-    identidade (`pd[0..1]`, U=0) e `pd[2]` aponta para um **bloco físico privado de 2 MiB**:
-    o código vai em `0x400000` e a pilha de usuário em `0x480000` — o *mesmo endereço virtual*
-    em todo processo, mas com memória física distinta. O escalonador faz `mov cr3` a cada troca
-    e ajusta `TSS.RSP0` para a pilha de kernel do processo.
-  - **`spawn`/`exit`/`wait`**: um processo terminado vira **zumbi** (com código de saída) até um
-    `WAIT` coletá-lo e liberar frames (`reaping`); `KILL` mata e libera na hora.
-- **Gestão de tarefas (job control)**, no espírito DOS+multitarefa:
-  - `DEMO [&]` inicia uma tarefa de demonstração; `SPAWN [BAD] [&]` (sinônimo: `RING3`) inicia
-    um processo ring 3 com espaço de endereço próprio.
-  - **`&` no fim** roda o comando em **background** e devolve o prompt (ex.: `SPAWN &`).
-  - **Sem `&`** roda em **foreground**: a shell espera o job terminar e **coleta o código de
-    saída**; **Ctrl+C** aborta e volta ao prompt (type-ahead preservado).
-  - `TASK` (ou `PS`) lista PID/nome/estado (run/zombie)/bloco de memória — um `ps` simples;
-    `KILL <pid>` mata; `WAIT <pid>` espera e coleta; `TAB <pid>` traz ao foreground.
-- **Ring 3 (modo usuário)**: GDT construída em runtime com segmentos de usuário (DPL3) + **TSS**
-  (`ltr`; `RSP0` = topo da pilha de kernel do processo ring 3, ajustado no escalonador); paging
-  marca só a janela `0x400000-0x5FFFFF` como **U/S=1** (o kernel permanece U=0, inacessível ao
-  usuário); o IDT expõe o vetor `0x21` como gate **DPL3**. Cada processo recebe seu **próprio
-  bloco** de 2 MiB nessa janela e entra em CPL3 via `iretq`. **Syscalls DOS-like** via
-  `INT 21h` (função em `AH`): `AH=09h` imprime string terminada em `$` (RSI), `AH=30h` getpid,
-  `AH=4Ch` exit(código em AL), `AH=80h` spawn(id do programa), `AH=81h` wait(pid). Falhas vindas
-  de CPL3 (ex.: `cli` em ring 3 → **#GP**) são **recuperáveis**: o kernel termina só aquele
-  processo (vira zumbi, código `-1`) e segue rodando.
-- **Desligamento/reboot**: `POWEROFF` faz ACPI S5 (porta PM1a_CNT 0x604) — no QEMU o
-  emulador encerra limpo (útil: nada fica preso capturando teclado/mouse do host);
-  `REBOOT` pulsa o reset via controlador 8042.
-- Entrada de **teclado PS/2** e **console serial** com um mini-shell:
-  `VER`, `ABOUT`, `HELP`, `CLS`, `ECHO <texto>`, `TICKS`, `SLEEP <s>`, `TIME`, `DATE`, `MEM`,
+- Boots via **GRUB (Multiboot2)** on x86-64 (long mode), from an ISO (BIOS).
+- C# kernel natively compiled with `ilc` (NativeAOT) against a **custom mini-CoreLib**
+  (`MiniCoreLib.cs`) — the only "libraries" required for the C# compiler to work
+  without an OS.
+- Text output in **VGA text mode** (`0xB8000`) mirrored to **COM1 (serial)**.
+- **IDT (256 gates) + PIC 8259A** remapped (IRQ0-15 → vectors **0x30-0x3F**): CPU
+  exceptions become readable panics (vector + RIP), and the **PS/2 keyboard is interrupt-driven**
+  (IRQ1 → vector 0x31, circular scancode queue, explicit EOI) — no polling. The remap
+  to 0x30 leaves vector **0x21** free for the DOS-like syscall `INT 21h`.
+- **Serial console (COM1, IRQ4 → vector 0x34)**: besides the PS/2 keyboard, the shell also
+  reads characters received over serial. This makes the session **headless** usable
+  (`./build.sh run` uses `-serial stdio`): what you type in the terminal reaches the shell.
+  Serial output uses CRLF.
+- **PIT timer** (8254, channel 0) at **100 Hz via IRQ0** (vector 0x30): global tick
+  counter, uptime in seconds, and the `TICKS`/`SLEEP <seconds>` commands (tick-driven wait).
+- **RTC clock** (CMOS, IRQ8 → vector 0x38): 24-hour + binary mode, "update-ended"
+  interrupt (~1 Hz) that keeps the kernel's software clock; `TIME` and `DATE` commands
+  show real time and date.
+- **Preemptive round-robin scheduler** over a **task table** (8 slots): slot 0 is the
+  **console/shell** (runs on the boot stack) and the others are tasks/processes created by
+  commands (`DEMO`, `SPAWN`), each with its own **16 KiB kernel stack**. Switching happens
+  by **preemption**: the PIT handler (IRQ0) switches context every tick (stack switch via
+  `osb_switch`), no `yield`; free slots are skipped. The interrupted ISR frame stays
+  "parked" on each task's stack until it is rescheduled.
+- **Processes with their own address space** (Slice 2):
+  - **Physical frame allocator** (4 KiB bitmap) over the Multiboot2 mmap; pool from
+    `0x200000` up to the top of RAM (here 64 MiB; ~15,872 frames). The window
+    `0x400000-0x5FFFFF` (the `pd[2]` of every space) is reserved. `MEM` shows usage/range.
+  - Each process has its own `PML4+PDPT+PD` (3 frames). The kernel is copied as an identity
+    map (`pd[0..1]`, U=0) and `pd[2]` points to a **private 2 MiB physical block**:
+    code goes at `0x400000` and the user stack at `0x480000` — the *same virtual address*
+    in every process, but with distinct physical memory. The scheduler does `mov cr3` on every
+    switch and adjusts `TSS.RSP0` to the process's kernel stack.
+  - **`spawn`/`exit`/`wait`**: a terminated process becomes a **zombie** (with exit code)
+    until a `WAIT` reaps it and frees frames; `KILL` kills and frees immediately.
+- **Task management (job control)**, in the DOS+multitasking spirit:
+  - `DEMO [&]` starts a demo task; `SPAWN [BAD] [&]` (alias: `RING3`) starts a
+    ring-3 process with its own address space.
+  - **`&` at the end** runs the command in **background** and returns the prompt (e.g. `SPAWN &`).
+  - **Without `&`** runs in **foreground**: the shell waits for the job to finish and
+    **collects the exit code**; **Ctrl+C** aborts and returns to the prompt (type-ahead preserved).
+  - `TASK` (or `PS`) lists PID/name/state (run/zombie)/memory block — a simple `ps`;
+    `KILL <pid>` kills; `WAIT <pid>` waits and reaps; `TAB <pid>` brings to foreground.
+- **Ring 3 (user mode)**: GDT built at runtime with user segments (DPL3) + **TSS**
+  (`ltr`; `RSP0` = top of the ring-3 process's kernel stack, adjusted by the scheduler);
+  paging marks only the `0x400000-0x5FFFFF` window as **U/S=1** (the kernel stays U=0,
+  inaccessible to user); the IDT exposes vector `0x21` as a **DPL3** gate. Each process
+  gets its own **2 MiB block** in that window and enters CPL3 via `iretq`. **DOS-like syscalls**
+  via `INT 21h` (function in `AH`): `AH=09h` prints a `$`-terminated string (RSI),
+  `AH=30h` getpid, `AH=4Ch` exit(code in AL), `AH=80h` spawn(program id),
+  `AH=81h` wait(pid). Failures coming from CPL3 (e.g. `cli` in ring 3 → **#GP**) are
+  **recoverable**: the kernel terminates only that process (becomes zombie, code `-1`) and
+  keeps running.
+- **Shutdown/reboot**: `POWEROFF` does ACPI S5 (PM1a_CNT port 0x604) — in QEMU the
+  emulator exits cleanly (useful: nothing stays capturing host keyboard/mouse);
+  `REBOOT` pulses reset via the 8042 controller.
+- **PS/2 keyboard** and **serial console** input with a mini-shell:
+  `VER`, `ABOUT`, `HELP`, `CLS`, `ECHO <text>`, `TICKS`, `SLEEP <s>`, `TIME`, `DATE`, `MEM`,
   `DEMO [&]`, `SPAWN [BAD] [&]`, `RING3 [BAD] [&]`, `TASK`/`PS`, `KILL <pid>`, `WAIT <pid>`,
   `TAB <pid>`, `HALT`, `POWEROFF`, `REBOOT`.
-- **Histórico e autocomplete na shell**:
-  - `HISTORY [n]` lista o histórico numerado (os **100 últimos** por padrão);
-  - `(:N)` re-executa a entrada N do histórico (ex.: `(:45)`);
-  - as **setas Up/Down** (ou `ESC [ A` / `ESC [ B` no serial) navegam pelo
-    histórico, preservando a linha em edição;
-  - **TAB** completa nomes de comando (primeiro token), flags (`/S` de `LN`)
-    e nomes de arquivo/diretório da ext4 em `A:` (relativos, absolutos, com
-    `\` automático para diretórios).
-- **Sistema de login** (estilo unix):
-  - o boot cai no prompt `login:`; **root entra sem senha**; contas com senha
-    pedem `Password:` (sem eco);
-  - `USER` lista as contas; `USER /ADD <nome> [senha]`, `USER /CHANGE <nome>
-    [senha]`, `USER /DEL <nome> [/HOME]`, `USER /SUDO` / `USER /UNSUDO`;
-  - `LOGIN [nome]` troca de usuário; `EXIT`/`LOGOUT` volta ao `login:`;
-  - `CHOWN <usuário> <caminho>` (root), `CHMOD <octal> <caminho>` (dono/root),
-    `SUDO <comando>` (quem está no SUDOERS, confirmando a própria senha);
-  - persistência em `A:\OSB\CONF\PASSWD` (`nome:senha:uid:home`, modo 0600) e
+- **History and autocomplete in the shell**:
+  - `HISTORY [n]` lists numbered history (the **last 100** by default);
+  - `(:N)` re-runs entry N of history (e.g. `(:45)`);
+  - **Up/Down arrows** (or `ESC [ A` / `ESC [ B` over serial) navigate history,
+    preserving the line being edited;
+  - **TAB** completes command names (first token), flags (`/S` of `LN`)
+    and file/directory names on ext4 in `A:` (relative, absolute, with automatic `\`
+    for directories).
+- **Login system** (unix-style):
+  - boot drops to the `login:` prompt; **root logs in without a password**; accounts with
+    a password are asked `Password:` (no echo);
+  - `USER` lists accounts; `USER /ADD <name> [password]`, `USER /CHANGE <name>
+    [password]`, `USER /DEL <name> [/HOME]`, `USER /SUDO` / `USER /UNSUDO`;
+  - `LOGIN [name]` switches user; `EXIT`/`LOGOUT` returns to `login:`;
+  - `CHOWN <user> <path>` (root), `CHMOD <octal> <path>` (owner/root),
+    `SUDO <command>` (those in SUDOERS, confirming their own password);
+  - persistence in `A:\OSB\CONF\PASSWD` (`name:password:uid:home`, mode 0600) and
     `A:\OSB\CONF\SUDOERS`;
-  - tudo sob `A:\OSB` é do root (uid 0), exceto `A:\OSB\HOME\<usuário>` (do
-    usuário, criado no `/ADD`, é o PWD inicial do login) e `A:\OSB\TEMP`
-    (modo 0777, compartilhado). `DIR` mostra o nome do dono.
-- **Ajuda de comandos**: todo comando interno aceita `/?` (ou `-?`) e exibe sua
-  página de ajuda (uso, flags, exemplos); `HELP <comando>` mostra a mesma página,
-  e `HELP` sozinho lista todos os comandos. Comandos externos recebem o `/?` e
-  tratam a ajuda por conta própria.
-- **Pipes**: `A | B` captura a saída de A e a anexa após o primeiro `\n` da linha
-  de B; `GREP [/I] <padrão> [arquivo]` filtra linhas (com `[arquivo]` lê o arquivo;
-  sem, filtra o stdin do pipe). Pipelines rodam em primeiro plano.
-- **Rede**: driver Intel PRO/1000 (e1000) polled, sobre PCI. `PCI` lista o bus
-  (`PCI net` detalha o adaptador; `PCI B:D.F` detalha um dispositivo); `PING <ip>
-  [n]` manda ICMP echo e mostra o tempo de ida e volta; `NET` mostra o
-  endereçamento, `NET <ip>` fixa um endereço estático e `NET DHCP` (ou `NET AUTO`)
-  negotiate com um servidor DHCP. Sem DHCP há um endereço estático embutido
-  (10.0.2.15/24, gateway 10.0.2.2) — por padrão o shell não configura a rede na
-  inicialização, para não travar o boot esperando um servidor.
+  - everything under `A:\OSB` belongs to root (uid 0), except `A:\OSB\HOME\<user>`
+    (owned by the user, created on `/ADD`, is the login's initial PWD) and `A:\OSB\TEMP`
+    (mode 0777, shared). `DIR` shows the owner's name.
+- **Command help**: every internal command accepts `/?` (or `-?`) and shows its
+  help page (usage, flags, examples); `HELP <command>` shows the same page,
+  and `HELP` alone lists all commands. External commands receive `/?` and handle
+  help themselves.
+- **Pipes**: `A | B` captures A's output and appends it after the first `\n` of B's
+  command line; `GREP [/I] <pattern> [file]` filters lines (with `[file]` reads the file;
+  without, filters the pipe's stdin). Pipelines run in foreground.
+- **Network**: polled Intel PRO/1000 (e1000) driver over PCI. `PCI` lists the bus
+  (`PCI net` details the adapter; `PCI B:D.F` details a device); `PING <ip>
+  [n]` sends ICMP echo and shows round-trip time; `NET` shows addressing,
+  `NET <ip>` sets a static address and `NET DHCP` (or `NET AUTO`)
+  negotiates with a DHCP server. Without DHCP there is a built-in static address
+  (10.0.2.15/24, gateway 10.0.2.2) — by default the shell does not configure the
+  network at boot, to avoid blocking boot waiting for a server.
 
-  Limite conhecido: a rede de usuário do QEMU não leva ICMP para a internet.
-  O slirp encapsula o ICMP externo dentro de UDP/7 e nada responde nessa porta
-  hoje, então `PING 8.8.8.8` dá timeout mesmo com o roteamento correto — o
-  pacote sai endereçado ao gateway, como deve. Alvos dentro da rede do QEMU
-  (por exemplo o próprio 10.0.2.2) respondem normalmente.
-- **Área de trabalho gráfica**: `GFX` abre uma área de trabalho no estilo Windows 3.11
-  (ícones, janelas, barra de tarefas), desenhada por `Gfx` sobre dois backends: o
-  framebuffer linear do Bochs/DISPI VBE (preferido — é o que aparece no `-vga std`
-  do QEMU) e o modo VGA legado 12h (640x480, quatro planos), para máquinas sem o
-  dispositivo Bochs. `GFX TEST` desenha uma tela de teste; `GFX TEXT` volta ao
-  console; **Ctrl+F4** fecha a área de trabalho e volta ao shell (a fonte 8x16 do
-  console é salva antes de entrar em modo gráfico e restaurada ao sair, então o
-  texto reaparece legível).
+  Known limitation: QEMU's user network does not carry ICMP to the internet.
+  Slirp encapsulates external ICMP inside UDP/7 and nothing responds on that port
+  today, so `PING 8.8.8.8` times out even with correct routing — the packet leaves
+  addressed to the gateway, as it should. Targets inside QEMU's network (for example
+  10.0.2.2 itself) respond normally.
+- **Graphical desktop**: `GFX` opens a Windows 3.11-style desktop
+  (icons, windows, taskbar), drawn by `Gfx` over two backends: the Bochs/DISPI VBE
+  linear framebuffer (preferred — what shows up with QEMU's `-vga std`)
+  and legacy VGA mode 12h (640x480, four planes), for machines without the Bochs
+  device. `GFX TEST` draws a test screen; `GFX TEXT` returns to the console;
+  **Ctrl+F4** closes the desktop and returns to the shell (the console's 8x16 font
+  is saved before entering graphics mode and restored on exit, so text comes back
+  readable).
 
-## Arquitetura
+## Architecture
 
 ```
 src/Osb.Kernel/
-├── Osb.Kernel.csproj   # projeto C# "sem .NET": NoStdLib, nada referenciado
-├── MiniCoreLib.cs      # mini-CoreLib: System.Object/String/primitivas + stubs que o
-│                       # ilc exige do "system module" (ThrowHelpers, Buffer, TypeCast...)
-├── Kernel.cs           # apenas a orquestração: Main/kmain (ordem de boot) + banner
-├── Hardware/           # porta de saída/entrada do kernel
-│   ├── Vga.cs          # modo texto 80x25 (espelha tudo no COM1)
-│   ├── Serial.cs       # COM1: saída + ring de entrada alimentado pela IRQ4
-│   ├── Keyboard.cs     # scancodes PS/2 (IRQ1) + mapa Shift
-│   ├── ConsoleControl.cs # sinais do console (Ctrl+C) entre IRQ e shell
-│   └── NativeMethods.cs  # P/Invoke "osbnative" (inb/outb, lgdt/lidt, switch, CR3...)
-├── Memory/             # memória física
-│   ├── Layout.cs       # constantes (VGA, IDT/PIC, GDT, ring 3, ATA, ext4, tasks)
-│   └── PhysicalMemory.cs # bitmap de frames + detecção do mapa Multiboot2
-├── Cpu/                # temporizadores, memória de controle e entrada de IRQ
-│   ├── Pit.cs          # 8254 canal 0 @ 100 Hz + contador de ticks
-│   ├── Rtc.cs          # CMOS/RTC: relógio de software (IRQ8), TIME/DATE
-│   ├── Gdt.cs          # segmentos kernel/user + TSS (RSP0)
-│   ├── Interrupts.cs   # 8259A, IDT e o despachante (osb_handle_interrupt)
-│   └── Syscalls.cs     # porta INT 21h (print/getpid/exit/spawn/wait)
-├── Processes/          # tarefas e memória por processo
-│   ├── Scheduler.cs    # tabela de slots, round-robin preemptivo, jobs
-│   └── AddressSpace.cs # CR3 privado por processo (bloco de 2 MiB)
-├── Storage/            # persistência
-│   ├── Ata.cs          # ATA PIO (setor de 512 bytes)
-│   ├── Ext4.cs         # ext4 simplificado (blocos, inodes, diretórios, resolução)
-│   └── Cwd.cs          # drive + diretório atual (namespace DOS)
-├── Network/            # rede (PCI, driver e pilha IPv4)
-│   ├── Pci.cs          # config space (0xCF8/0xCFC) + varredura de bus
-│   ├── E1000.cs        # driver Intel PRO/1000 polled (anéis TX/RX, sem IRQ)
-│   ├── NetStack.cs     # estado da interface, helpers de quadro/checksum
-│   ├── NetStack.Ip.cs  # IPv4/UDP/ICMP (transmissão)
-│   ├── NetStack.Arp.cs # resolução de endereço
-│   └── Dhcp.cs         # cliente DHCP: DISCOVER -> OFFER -> REQUEST -> ACK
-├── Shell/              # o prompt e os comandos
-│   ├── Shell.cs        # laço de entrada (serial/teclado) + despacho de comandos
+├── Osb.Kernel.csproj   # "no .NET" C# project: NoStdLib, nothing referenced
+├── MiniCoreLib.cs      # mini-CoreLib: System.Object/String/primitives + stubs the
+│                       # ilc requires from the "system module" (ThrowHelpers, Buffer, TypeCast...)
+├── Kernel.cs           # only orchestration: Main/kmain (boot order) + banner
+├── Hardware/           # kernel I/O boundary
+│   ├── Vga.cs          # 80x25 text mode (mirrors everything to COM1)
+│   ├── Serial.cs       # COM1: output + input ring fed by IRQ4
+│   ├── Keyboard.cs     # PS/2 scancodes (IRQ1) + Shift map
+│   ├── ConsoleControl.cs # console signals (Ctrl+C) between IRQ and shell
+│   └── NativeMethods.cs  # "osbnative" P/Invoke (inb/outb, lgdt/lidt, switch, CR3...)
+├── Memory/             # physical memory
+│   ├── Layout.cs       # constants (VGA, IDT/PIC, GDT, ring 3, ATA, ext4, tasks)
+│   └── PhysicalMemory.cs # frame bitmap + Multiboot2 map detection
+├── Cpu/                # timers, control memory and IRQ entry
+│   ├── Pit.cs          # 8254 channel 0 @ 100 Hz + tick counter
+│   ├── Rtc.cs          # CMOS/RTC: software clock (IRQ8), TIME/DATE
+│   ├── Gdt.cs          # kernel/user segments + TSS (RSP0)
+│   ├── Interrupts.cs   # 8259A, IDT and dispatcher (osb_handle_interrupt)
+│   └── Syscalls.cs     # INT 21h port (print/getpid/exit/spawn/wait)
+├── Processes/          # tasks and per-process memory
+│   ├── Scheduler.cs    # slot table, preemptive round-robin, jobs
+│   └── AddressSpace.cs # private CR3 per process (2 MiB block)
+├── Storage/            # persistence
+│   ├── Ata.cs          # ATA PIO (512-byte sectors)
+│   ├── Ext4.cs         # simplified ext4 (blocks, inodes, directories, resolution)
+│   └── Cwd.cs          # current drive + directory (DOS namespace)
+├── Network/            # networking (PCI, driver and IPv4 stack)
+│   ├── Pci.cs          # config space (0xCF8/0xCFC) + bus scan
+│   ├── E1000.cs        # polled Intel PRO/1000 driver (TX/RX rings, no IRQ)
+│   ├── NetStack.cs     # interface state, frame/checksum helpers
+│   ├── NetStack.Ip.cs  # IPv4/UDP/ICMP (transmission)
+│   ├── NetStack.Arp.cs # address resolution
+│   └── Dhcp.cs         # DHCP client: DISCOVER -> OFFER -> REQUEST -> ACK
+├── Shell/              # prompt and commands
+│   ├── Shell.cs        # input loop (serial/keyboard) + command dispatch
 │   ├── Environment.cs  # $VAR / SET
-│   ├── Prompt.cs       # $PROMPT no estilo DOS ($P$G...)
-│   ├── JobControl.cs   # foreground/background, espera e reap
-│   ├── History.cs      # anel de histórico + HISTORY/(:N)/setas Up/Down
-│   ├── Completion.cs   # TAB: comandos, /flags e nomes de arquivo
-│   ├── Users.cs        # contas, sessão, permissões (PASSWD/SUDOERS)
-│   ├── ShellText.cs    # comparações/parse/padding de texto
+│   ├── Prompt.cs       # DOS-style $PROMPT ($P$G...)
+│   ├── JobControl.cs   # foreground/background, wait and reap
+│   ├── History.cs      # history ring + HISTORY/(:N)/Up/Down arrows
+│   ├── Completion.cs   # TAB: commands, /flags and file names
+│   ├── Users.cs        # accounts, sessions, permissions (PASSWD/SUDOERS)
+│   ├── ShellText.cs    # text comparisons/parse/padding
 │   └── Commands/       # SystemCommands, EnvironmentCommands, FileCommands,
 │                       # UserCommands (USER/LOGIN/CHOWN/CHMOD/SUDO), TaskCommands
-├── OslangKernel.cs     # interpretador OSLANG 0.72 (lexer/parser/runtime) no kernel
-├── boot.S              # bootstrap Multiboot2: 32-bit -> long mode -> chama kmain
+├── OslangKernel.cs     # OSLANG 0.72 interpreter (lexer/parser/runtime) in the kernel
+├── boot.S              # Multiboot2 bootstrap: 32-bit -> long mode -> calls kmain
 │                       # (+ helpers: outb/inb, mem*, lidt, sti/cli, halt, lgdt/ltr,
-│                       #  enter_user, load_cr3, page tables do kernel)
-├── sched.S             # troca de contexto (osb_switch) + trampolines (demo/user)
-├── user.S              # programas ring 3: HELLO (teste de isolamento) + BAD (cli->#GP)
-├── interrupts.S        # gerado no build: 256 stubs de ISR + isr_common + tabela de stubs
-├── linker.ld           # layout ELF (carregado em 0x100000)
-├── grub.cfg            # menu do GRUB (multiboot2)
-├── ROADMAP.md          # plano: multiusuário/ext4, fatias verticais, ring 3+
-└── build.sh            # build completo -> osb.iso
+│                       #  enter_user, load_cr3, kernel page tables)
+├── sched.S             # context switch (osb_switch) + trampolines (demo/user)
+├── user.S              # ring-3 programs: HELLO (isolation test) + BAD (cli->#GP)
+├── interrupts.S        # generated at build: 256 ISR stubs + isr_common + stub table
+├── linker.ld           # ELF layout (loaded at 0x100000)
+├── grub.cfg            # GRUB menu (multiboot2)
+├── ROADMAP.md          # plan: multiuser/ext4, vertical slices, ring 3+
+└── build.sh            # full build -> osb.iso
 ```
 
-Cada subsistema é uma classe `internal static` no seu próprio namespace
+Each subsystem is an `internal static` class in its own namespace
 (`Osb.Kernel.Hardware`, `Osb.Kernel.Memory`, `Osb.Kernel.Cpu`,
-`Osb.Kernel.Processes`, `Osb.Kernel.Storage`, `Osb.Kernel.Shell`): o estado fica
-junto de quem o usa e o `Kernel.cs` só ordena a subida da máquina.
+`Osb.Kernel.Processes`, `Osb.Kernel.Storage`, `Osb.Kernel.Shell`): state lives
+with whoever uses it and `Kernel.cs` only orders the machine's bring-up.
 
-Pipeline de build:
+Build pipeline:
 
 ```
 C# (mini-CoreLib)  ──csc──▶  OsbKernel.dll (IL)
-OsbKernel.dll      ──ilc──▶  OsbKernel.o   (objeto x86-64 freestanding)
+OsbKernel.dll      ──ilc──▶  OsbKernel.o   (freestanding x86-64 object)
 boot.S + sched.S + user.S + interrupts.S ─clang▶ boot.o + sched.o + user.o + interrupts.o
 (...objects) + OsbKernel.o ──ld.lld + linker.ld─▶ kernel.elf (Multiboot2 ELF)
 kernel.elf         ──grub-mkrescue─▶       osb.iso
 ```
 
-## Pré-requisitos
+## Prerequisites
 
 - .NET SDK 10.x
-- clang, lld (ld.lld), xorriso, grub-mkrescue (grub-pc-bin), nasm (opcional)
-- qemu-system-x86_64 (para testar)
+- clang, lld (ld.lld), xorriso, grub-mkrescue (grub-pc-bin), nasm (optional)
+- qemu-system-x86_64 (for testing)
 
-## Build e execução
+## Build and run
 
 ```sh
 cd src/Osb.Kernel
 chmod +x build.sh
-./build.sh            # gera src/Osb.Kernel/osb.iso
-./build.sh run        # build + boot no QEMU (serial no terminal, sem janela)
-./build.sh run-gui    # idem, mas abre a janela VGA (cuidado com o grab de input)
-./build.sh check      # valida que kernel.elf é Multiboot2
+./build.sh            # generates src/Osb.Kernel/osb.iso
+./build.sh run        # build + boot in QEMU (serial in terminal, no window)
+./build.sh run-gui    # same, but opens the VGA window (careful with input grab)
+./build.sh check      # validates that kernel.elf is Multiboot2
 ```
 
-`run` usa `-display none -serial stdio`: sem janela, então o QEMU **não captura** o
-teclado/mouse do host. O kernel espelha a VGA na serial e **também lê a serial como
-entrada**, então você digita diretamente na shell pelo terminal — é só digitar um comando
-e Enter. Para sair: `POWEROFF` no prompt do OSB (ACPI S5 → o QEMU encerra sozinho).
+`run` uses `-display none -serial stdio`: no window, so QEMU **does not capture**
+the host keyboard/mouse. The kernel mirrors VGA to serial and **also reads serial as
+input**, so you type directly into the OSB shell through the terminal — just type a
+command and Enter. To exit: `POWEROFF` at the OSB prompt (ACPI S5 → QEMU exits on its own).
 
-`run` anexa um e1000 numa rede de usuário do QEMU (`-netdev user -device e1000`),
-que é o que `PING` e `NET DHCP` esperam. Nessa rede o endereço é 10.0.2.15/24,
-gateway 10.0.2.2 e o servidor DHCP é o próprio 10.0.2.2.
+`run` attaches an e1000 on a QEMU user network (`-netdev user -device e1000`),
+which is what `PING` and `NET DHCP` expect. On that network the address is 10.0.2.15/24,
+gateway 10.0.2.2 and the DHCP server is 10.0.2.2 itself.
 
-Se rodar com janela (`run-gui` ou QEMU manual), o grab de input pode prender o mouse/
-teclado da sessão: **Ctrl+Alt+G** libera o grab e **Ctrl+Alt+2** abre o monitor do QEMU
-(depois `quit`). O comando `POWEROFF` também encerra o emulador e libera o input.
+When running with a window (`run-gui` or manual QEMU), input grab may trap the mouse/
+keyboard of the session: **Ctrl+Alt+G** releases the grab and **Ctrl+Alt+2** opens the
+QEMU monitor (then `quit`). The `POWEROFF` command also shuts down the emulator and
+releases input.
 
-## Próximos passos sugeridos
+## Suggested next steps
 
-- **Processos com espaço de endereço próprio já funcionam** (Fatia 2): CR3 por processo,
-  `spawn`/`exit`/`wait` e isolamento comprovado — ver `ROADMAP.md`, Fatia 2.
-- **Multiusuário** (Fatias 3/6): contas, `LOGIN`, sessões/consoles, permissões vindas do ext4.
-- **ext4** (Fatias 4/5): leitura já operacional (`DIR`/`CD`/`TYPE`); falta a
-  **escrita** (bitmaps de bloco/inode → `MD`/`RD`) e depois `COPY DEL REN`. O disco
-  é `A:` no idioma DOS; é o que permitirá comandos externos (`.EXE`) e scripts.
-- **Conforto da shell já implementado:** variáveis de ambiente `$VAR` (nomes case-insensitive),
-  `SET [NAME]` / `SET NAME=value`, `PROMPT` DOS (`$P$G` e tokens `$D/$T/$N/...`) com
-  defaults de boot `PATH PROMPT USER HOME TEMP COMSPEC OS VER LASTDRIVE`.
-- ACPI + MMIO, framebuffer via `multiboot2` (modo gráfico) em vez de VGA text.
-- **Endurecimento**: IST para exceções, SMAP/SMEP, validar ponteiros de syscall com mais rigor.
+- **Processes with their own address space already work** (Slice 2): per-process CR3,
+  `spawn`/`exit`/`wait` and proven isolation — see `ROADMAP.md`, Slice 2.
+- **Multi-user** (Slices 3/6): accounts, `LOGIN`, sessions/consoles, permissions from ext4.
+- **ext4** (Slices 4/5): reading already operational (`DIR`/`CD`/`TYPE`); missing
+  **writing** (block/inode bitmaps → `MD`/`RD`) and then `COPY DEL REN`. The disk is
+  `A:` in DOS parlance; it will enable external commands (`.EXE`) and scripts.
+- **Shell comfort already implemented:** environment variables `$VAR` (case-insensitive
+  names), `SET [NAME]` / `SET NAME=value`, DOS `PROMPT` (`$P$G` and tokens
+  `$D/$T/$N/...`) with boot defaults `PATH PROMPT USER HOME TEMP COMSPEC OS VER LASTDRIVE`.
+- ACPI + MMIO, framebuffer via `multiboot2` (graphics mode) instead of VGA text.
+- **Hardening**: IST for exceptions, SMAP/SMEP, stricter syscall pointer validation.
 
-## Notas
+## Notes
 
-- O ilc é localizado automaticamente no cache NuGet
+- ilc is located automatically in the NuGet cache
   (`runtime.linux-x64.microsoft.dotnet.ilcompiler`).
-- `MiniCoreLib.cs` é a fronteira do "runtime": tudo que o C# exige sem um OS.
-  Manter pequena; nada de GC/alocação — o kernel usa buffers fixos/stackalloc.
-- `interrupts.S` é gerado deterministicamente pelo `build.sh` (256 stubs: cada um
-  empurra `[vetor][dummy]`, descartando o error code da CPU nos vetores 8/10-14/17).
-  O `isr_common` salva **GPRs + XMM0-15** (o handler SysV pode sujar registradores
-  vetorizados do código interrompido), realinha a stack em 16 bytes, chama
-  `osb_handle_interrupt` e faz `iretq`.
-- O shell "dorme" com `sti; hlt` quando a fila de scancodes está vazia; a IRQ1
-  entrega o scancode e a IRQ0 (100 Hz) acorda o idle a cada tick.
-- **Qualquer IRQ do slave (IRQ8-15) exige o cascateamento no master**: sem IRQ2
-  desmascarado no 8259A master (OCW1 = `0xF8` = IRQ0/IRQ1/IRQ2), a IRQ8 do RTC nunca
-  chega à CPU. `0xF8`, e não `0xFB` (que mascara justamente IRQ0 e IRQ1).
-- **Preempção**: `SchedulerTick` roda dentro do handler da IRQ0 (portanto com IF=0, logo
-  atômica) e faz `osb_switch` para a outra tarefa. O EOI é enviado **antes** da troca,
-  para o PIC poder entregar o próximo tick já na tarefa nova. Quando a tarefa é
-  reescalonada, ela retoma de dentro do próprio `SchedulerTick`, desenrola o handler,
-  restaura GPRs+XMM do frame e faz `iretq` — o contexto interrompido volta intacto.
-- `osb_switch` só salva os registradores **callee-saved** (rbx, rbp, r12-r15). Isso basta
-  porque o `isr_common` já salva **todos** os GPRs e XMM no frame de interrupção antes de
-  chamar o handler: o que a troca de contexto precisa preservar são só os callee-saved
-  vivos entre o `iretq` e o ponto de troca.
-- A tarefa demo tem pilha fixa de 16 KiB em `.bss`; a IRQ pode interrompê-la e roda na
-  própria pilha da tarefa (sem TSS), então o espaço precisa cobrir ISR + handler.
-- **SSE requer CR0.EM=0**: com `CR0.EM=1` toda instrução SSE do código C# (ex.
-  `movups` de um stackalloc) sofre `#UD`. O `boot.S` força CR0 (PG|NE|WP, EM/TS=0)
-  e CR4 (PAE|OSFXSR|OSXMMEXCPT) na entrada do long mode.
-- **PIC remapeado para 0x30-0x3F** (e não 0x20-0x2F): libera o vetor **0x21** para a
-  syscall `INT 21h`, sem colidir com a IRQ1 (teclado). Constantes `PicBase=0x30`,
+- `MiniCoreLib.cs` is the boundary of the "runtime": everything C# requires without an OS.
+  Keep it small; no GC/allocation — the kernel uses fixed buffers/stackalloc.
+- `interrupts.S` is generated deterministically by `build.sh` (256 stubs: each pushes
+  `[vector][dummy]`, discarding the CPU error code on vectors 8/10-14/17).
+  `isr_common` saves **GPRs + XMM0-15** (the SysV handler may clobber vectorized registers
+  of the interrupted code), realigns the stack to 16 bytes, calls `osb_handle_interrupt`
+  and does `iretq`.
+- The shell "sleeps" with `sti; hlt` when the scancode queue is empty; IRQ1 delivers
+  the scancode and IRQ0 (100 Hz) wakes the idle every tick.
+- **Any slave IRQ (IRQ8-15) requires cascading on the master**: without IRQ2
+  unmasked on the 8259A master (OCW1 = `0xF8` = IRQ0/IRQ1/IRQ2), the RTC's IRQ8 never
+  reaches the CPU. `0xF8`, not `0xFB` (which masks precisely IRQ0 and IRQ1).
+- **Preemption**: `SchedulerTick` runs inside the IRQ0 handler (therefore with IF=0, hence
+  atomic) and performs `osb_switch` to the other task. EOI is sent **before** the switch,
+  so the PIC can deliver the next tick to the new task. When the task is rescheduled, it
+  resumes from inside `SchedulerTick` itself, unwinds the handler, restores GPRs+XMM from
+  the frame and does `iretq` — the interrupted context comes back intact.
+- `osb_switch` saves only **callee-saved** registers (rbx, rbp, r12-r15). That is enough
+  because `isr_common` already saves **all** GPRs and XMM in the interrupt frame before
+  calling the handler: what the context switch must preserve are only the callee-saved
+  registers live between the `iretq` and the switch point.
+- The demo task has a fixed 16 KiB stack in `.bss`; an IRQ may interrupt it and runs on
+  the task's own stack (no TSS), so the space must cover ISR + handler.
+- **SSE requires CR0.EM=0**: with `CR0.EM=1` every SSE instruction in the C# code (e.g.
+  `movups` from a stackalloc) raises `#UD`. `boot.S` forces CR0 (PG|NE|WP, EM/TS=0)
+  and CR4 (PAE|OSFXSR|OSXMMEXCPT) on entry to long mode.
+- **PIC remapped to 0x30-0x3F** (not 0x20-0x2F): frees vector **0x21** for the
+  `INT 21h` syscall, without colliding with IRQ1 (keyboard). Constants `PicBase=0x30`,
   `TimerVector=0x30`, `KbdVector=0x31`, `RtcVector=0x38`.
-- **Ring 3 + processos**: a GDT é montada em `Cpu/Gdt.cs` (segmentos user code `0x18` / data `0x20`,
-  ambos DPL3, + descritor TSS em `0x28`), carregada com `osb_lgdt`/`osb_ltr`. O `RSP0` do
-  TSS aponta para o topo da pilha de kernel **do processo de usuário** — é para lá que a
-  CPU troca quando chega uma interrupção/syscall de CPL3. Na entrada do usuário usamos
-  seletores com RPL3 (`0x1B`/`0x23`). Cada processo tem page tables próprias (`PML4/PDPT/PD`);
-  copiamos o mapa de identidade do kernel (`osb_master_pd()`) e trocamos só `pd[2]` por um bloco
-  físico privado de 2 MiB. O programa (`user.S`) é copiado para o início do bloco e o escalonador
-  troca o CR3 (`osb_load_cr3`) a cada contexto. Um segundo blob (`BAD`) executa `cli` para provar
-  o `#GP` em CPL3.
-- **Por que `pd[2]` e a janela reservada**: como o kernel é *identity-mapped* em 0-1 GiB, o
-  endereço físico de um bloco recém-alocado só coincide com o virtual fora da janela do usuário.
-  Por isso o alocador nunca entrega frames em `0x400000-0x600000` (512 frames): assim o kernel
-  consegue inicializar qualquer bloco pela sua identidade, mesmo rodando sob o CR3 de um processo
-  que pediu `spawn`. Zumbis que ninguém espera ocupam um slot, mas os frames só voltam no reaping.
-- **Falta de recurso ao falhar (user fault)**: uma exceção com CS.RPL==3 é tratada como
-  falha do programa (imprime vetor/err/RIP, marca a tarefa como **zumbi** com código `-1` e
-  escala para outra); exceções de CPL0 continuam sendo panic fatal.
+- **Ring 3 + processes**: the GDT is built in `Cpu/Gdt.cs` (user code segment `0x18` /
+  data `0x20`, both DPL3, + TSS descriptor at `0x28`), loaded with `osb_lgdt`/`osb_ltr`.
+  The TSS `RSP0` points to the top of the **user process's** kernel stack — that is where
+  the CPU switches when an interrupt/syscall arrives from CPL3. On user entry we use
+  selectors with RPL3 (`0x1B`/`0x23`). Each process has its own page tables (`PML4/PDPT/PD`);
+  we copy the kernel's identity map (`osb_master_pd()`) and replace only `pd[2]` with a
+  private 2 MiB physical block. The program (`user.S`) is copied to the start of the block
+  and the scheduler swaps CR3 (`osb_load_cr3`) on every context. A second blob (`BAD`)
+  executes `cli` to prove `#GP` in CPL3.
+- **Why `pd[2]` and the reserved window**: since the kernel is *identity-mapped* in 0-1 GiB,
+  the physical address of a freshly allocated block only matches the virtual one outside the
+  user window. That is why the allocator never hands out frames in `0x400000-0x600000`
+  (512 frames): this way the kernel can initialize any block through its identity, even
+  while running under a process's CR3 that called `spawn`. Zombies nobody waits for occupy
+  a slot, but frames only come back on reaping.
+- **Resource failure on user fault**: an exception with CS.RPL==3 is treated as a program
+  failure (prints vector/err/RIP, marks the task as **zombie** with code `-1` and schedules
+  another); CPL0 exceptions remain fatal panics.

@@ -477,14 +477,14 @@ if [[ -d "$ROOT/../osb.xwin" ]]; then
 fi
 if [[ -n "$XWIN_ROOT" && -x "$XWIN_ROOT/build.sh" ]]; then
     mkdir -p "$OBJ/fs/xwin_stage"
-    if STAGE_BIN="$OBJ/fs/xwin_stage" "$XWIN_ROOT/build.sh" > /tmp/opencode/xwin_stage.log 2>&1; then
+    if STAGE_BIN="$OBJ/fs/xwin_stage" "$XWIN_ROOT/build.sh" > "$OBJ/xwin_stage.log" 2>&1; then
         if [[ -f "$OBJ/fs/xwin_stage/XWIN.EXE" ]]; then
             debugfs -w -R "write \"$OBJ/fs/xwin_stage/XWIN.EXE\" /OSB/BIN/XWIN.EXE" "$OUT_IMG" >/dev/null 2>&1
             e2fsck -fy "$OUT_IMG" >/dev/null 2>&1
             echo "  staged /OSB/BIN/XWIN.EXE"
         fi
     else
-        echo "  WARN: XWIN build failed (see /tmp/opencode/xwin_stage.log), continuing" >&2
+        echo "  WARN: XWIN build failed (see $OBJ/xwin_stage.log), continuing" >&2
     fi
 fi
 echo "OK -> $OUT_IMG"
@@ -628,8 +628,8 @@ echo "[4/6] Linking kernel.elf ..."
 ld.lld -T "$ROOT/linker.ld" -o "$OBJ/kernel.elf" \
     "$OBJ/boot.o" "$OBJ/interrupts.o" "$OBJ/sched.o" "$OBJ/user.o" "$OBJ/OsbKernel.o" --no-relax
 
-# ----- compile the userspace shell (SHELL.EXE) -----
-echo "[x/6] Compiling userspace shell ..."
+# ----- compile ring-3 programs (SHELL.EXE + tests) -----
+echo "[x/6] Compiling ring-3 programs ..."
 # Locate the native AOT compiler shipped with the SDK (NuGet cache).
 ILC_SHELL="$(ls -1d "$HOME"/.nuget/packages/runtime.linux-x64.microsoft.dotnet.ilcompiler/*/tools/ilc 2>/dev/null | sort -V | tail -n1)"
 if [[ -z "$ILC_SHELL" || ! -x "$ILC_SHELL" ]]; then
@@ -638,36 +638,49 @@ if [[ -z "$ILC_SHELL" || ! -x "$ILC_SHELL" ]]; then
     exit 1
 fi
 
-# Build managed DLL
-dotnet build -c Release "$ROOT/../osb.shell/Osb.Shell.Userspace.csproj" -v q -nologo
-DLL_SHELL="$ROOT/../osb.shell/bin/Release/net10.0/OsbShell.dll"
-test -f "$DLL_SHELL" || { echo "ERROR: $DLL_SHELL not produced"; exit 1; }
-
-# NativeAOT (ilc)
-"$ILC_SHELL" "$DLL_SHELL" -o "$OBJ/OsbShell.o" \
-    --systemmodule OsbShell \
-    --targetarch x64 --targetos linux \
-    -O -g --directpinvoke:osbnative \
-    --map "$OBJ/OsbShell.map"
-
 # Ring-3 entry / syscall shim / runtime helpers (shared osbkt crt0).
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/userspace.o" \
     "$ROOT/../osbkt/crt0.S"
 
-# Link the userspace shell as a standalone image at UserBase (0x2000000).
-# osb_startup is the ilc entry symbol of the consuming module (--defsym).
-ld.lld -T "$ROOT/../osbkt/user.ld" -o "$OBJ/OsbShell.elf" \
-    "$OBJ/userspace.o" "$OBJ/OsbShell.o" --no-relax \
-    --defsym=osb_startup=OsbShell__Module___StartupCodeMain
+# compile_rt3 <module> <csproj> [staged-name] -- build one ring-3 program,
+# link it at UserBase (0x2000000) via osbkt/user.ld (osb_startup = the ilc
+# entry symbol of the module), wrap it as OSBEXE and stage it at
+# /OSB/BIN/<staged-name or module>.EXE with mode 0100755 (F3: every shipped
+# .EXE must be executable).
+compile_rt3() {
+    local module="$1" csproj="$2" staged="${3:-$1}"
+    echo "  building $staged.EXE ..."
+    dotnet build -c Release "$csproj" -v q -nologo
+    local dll
+    dll="$(dirname "$csproj")/bin/Release/net10.0/$module.dll"
+    test -f "$dll" || { echo "ERROR: $dll not produced"; exit 1; }
+    "$ILC_SHELL" "$dll" -o "$OBJ/$module.o" \
+        --systemmodule "$module" \
+        --targetarch x64 --targetos linux \
+        -O -g --directpinvoke:osbnative \
+        --map "$OBJ/$module.map"
+    ld.lld -T "$ROOT/../osbkt/user.ld" -o "$OBJ/$module.elf" \
+        "$OBJ/userspace.o" "$OBJ/$module.o" --no-relax \
+        --defsym="osb_startup=${module}__Module___StartupCodeMain"
+    objcopy -O binary "$OBJ/$module.elf" "$OBJ/$module.bin"
+    python3 "$ROOT/../osbkt/mkosbx.py" "$OBJ/$module.bin" "$OBJ/$module.EXE" 0 >/dev/null
+    debugfs -w -R "write \"$OBJ/$module.EXE\" /OSB/BIN/$staged.EXE" "$OUT_IMG" >/dev/null 2>&1
+    debugfs -w -R "sif /OSB/BIN/$staged.EXE mode 0100755" "$OUT_IMG" >/dev/null 2>&1
+    echo "  staged /OSB/BIN/$staged.EXE (mode 0100755)"
+}
 
-# Convert to flat binary and wrap as OSBEXE.
-objcopy -O binary "$OBJ/OsbShell.elf" "$OBJ/OsbShell.bin"
-python3 "$ROOT/../osbkt/mkosbx.py" "$OBJ/OsbShell.bin" "$OBJ/SHELL.EXE" 0
+compile_rt3 OsbShell "$ROOT/../osb.shell/Osb.Shell.Userspace.csproj" SHELL
 
-# Write the binary into the ext4 image at /OSB/BIN/SHELL.EXE
-debugfs -w -R "write \"$OBJ/SHELL.EXE\" /OSB/BIN/SHELL.EXE" "$OUT_IMG" >/dev/null 2>&1
+# Ring-3 ABI test programs (run from the shell; see osb.shell/tests/progs).
+for prog in TSpawn TExit TArgs TPrint; do
+    compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
+done
+
 e2fsck -fy "$OUT_IMG" >/dev/null 2>&1
-echo "  staged /OSB/BIN/SHELL.EXE"
+
+# Report the staged .EXE modes (F3: exec bit must be set).
+echo "  .EXE modes in /OSB/BIN:"
+debugfs -R "ls -l /OSB/BIN" "$OUT_IMG" 2>/dev/null | grep -i "\.EXE" || true
 
 echo "[5/6] Building ISO ..."
 rm -rf "$ISO_DIR"

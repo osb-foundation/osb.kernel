@@ -67,6 +67,31 @@ internal static unsafe partial class Syscalls
             return;
         }
 
+        if (func == 0x6A) // spawnpath(path in RDI, len in RSI, args in RDX, argsLen in RCX)
+        {
+            // Minimal 1a.1 SPAWNPATH: load an external .EXE by path; stdout and
+            // stdin are the console. The full handle-based form (redirection,
+            // elevate) is phase 1b (osbkt/docs/ABI.md).
+            if (rdi < Layout.UserBase || rdi >= Layout.UserLimit)
+            {
+                frame[14] = unchecked((ulong)-1); // EFAULT
+                return;
+            }
+            int pid;
+            SpawnResult r = Scheduler.SpawnFile((char*)rdi, (int)rsi, Scheduler.Current, out pid);
+            if (r != SpawnResult.Ok)
+            {
+                frame[14] = unchecked((ulong)-1);
+                return;
+            }
+            int slot;
+            if (rcx > 0 && rdx >= Layout.UserBase && rdx < Layout.UserLimit &&
+                Scheduler.TryFindPid(pid, out slot))
+                Scheduler.SetArgs(slot, (char*)rdx, (int)rcx);
+            frame[14] = (ulong)pid;
+            return;
+        }
+
         if (func == 0x81) // wait(pid in RSI): blocks until the child exits
         {
             frame[14] = unchecked((ulong)Scheduler.WaitFor((int)rsi));

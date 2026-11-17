@@ -54,28 +54,67 @@ namespace Osb.Kernel
         Vga.WriteLine("Processes: private address space per process (CR3).");
         Vga.WriteLine("Ring 3: user segments + TSS; syscalls via INT 21h (DOS-style).");
         Vga.WriteLine("Files: ATA PIO + ext4 on A:.");
-        Vga.WriteLine("Shell: userspace SHELL.EXE (A:\\OSB\\BIN\\SHELL.EXE)");
+        Vga.WriteLine("Shell: boot program (default A:\\OSB\\BIN\\SHELL.EXE, A:\\OSB\\CONF\\BOOT overrides)");
         Vga.WriteLine("Mouse: PS/2 IRQ12 (stream mode).");
         Vga.WriteLine("");
 
         Environment.Init();     // session environment (PATH, PROMPT, USER, ...)
 
-        // Hand control to the userspace shell (SHELL.EXE)
-        fixed (char* sp = "A:\\OSB\\BIN\\SHELL.EXE")
+        // Hand control to the userspace shell. The boot program is
+        // A:\OSB\CONF\BOOT (first line) when present, else SHELL.EXE; the
+        // golden harness points it at a test program (e.g. TWait.EXE) to
+        // exercise the syscall gate without patching the kernel.
+        char* boot = stackalloc char[256];
+        int bootLen = ReadBootProgram(boot, 256);
+        if (bootLen <= 0)
         {
-            int pid;
-            var r = Scheduler.SpawnFile(sp, 20, Scheduler.Console, out pid);
-            if (r != SpawnResult.Ok)
+            fixed (char* def = "A:\\OSB\\BIN\\SHELL.EXE")
             {
-                // If we cannot launch the userspace shell, halt the system.
-                Vga.WriteLine("Failed to launch userspace shell. Halting.");
-                while (true) { NativeMethods.hlt_cpu(); }
+                bootLen = 0;
+                while (def[bootLen] != '\0') bootLen++;
+                for (int i = 0; i < bootLen; i++) boot[i] = def[i];
             }
-            Scheduler.WaitFor(pid);
-            // If the userspace shell exits, halt the system.
-            Vga.WriteLine("Userspace shell exited. Halting.");
+        }
+        int pid;
+        var r = Scheduler.SpawnFile(boot, bootLen, Scheduler.Console, out pid);
+        if (r != SpawnResult.Ok)
+        {
+            // If we cannot launch the boot program, halt the system.
+            Vga.WriteLine("Failed to launch boot program. Halting.");
             while (true) { NativeMethods.hlt_cpu(); }
         }
+        Scheduler.WaitFor(pid);
+        // If the boot program exits, halt the system.
+        Vga.WriteLine("Boot program exited. Halting.");
+        while (true) { NativeMethods.hlt_cpu(); }
+    }
+
+    // Reads A:\OSB\CONF\BOOT (first line, trailing spaces trimmed) into path.
+    // Returns the length, or 0 when the file is missing/empty/unreadable.
+    private static int ReadBootProgram(char* path, int cap)
+    {
+        if (!Storage.Ext4.Mount()) return 0;
+        uint ino;
+        fixed (char* boot = "A:\\OSB\\CONF\\BOOT")
+        {
+            int bl = 0; while (boot[bl] != '\0') bl++;
+            if (!Storage.Ext4.Resolve(boot, bl, out ino)) return 0;
+        }
+        byte* inode = stackalloc byte[256];
+        if (!Storage.Ext4.ReadInode(ino, inode)) return 0;
+        if (!Storage.Ext4.IsReg(Storage.Ext4.InodeGetMode(inode))) return 0;
+        byte* buf = stackalloc byte[256];
+        int got;
+        if (!Storage.Ext4.ReadFileAll(ino, buf, 256, out got)) return 0;
+        int n = 0;
+        for (int i = 0; i < got && n < cap - 1; i++)
+        {
+            byte b = buf[i];
+            if (b == (byte)'\r' || b == (byte)'\n') break;   // first line only
+            path[n++] = (char)b;
+        }
+        while (n > 0 && path[n - 1] == ' ') n--;              // trim trailing spaces
+        return n;
     }
 }
 }

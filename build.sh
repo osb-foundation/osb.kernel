@@ -27,6 +27,30 @@ if [[ -z "${CC:-}" ]]; then
     else echo "ERROR: neither clang nor gcc found in PATH." >&2; exit 1; fi
 fi
 
+# Run a build command quietly; abort with a clear message on failure. The old
+# code discarded debugfs/e2fsck output with `>/dev/null 2>&1`, so a failed
+# write/sif/mkdir aborted the build with no explanation (review item 5).
+run() {
+    if ! "$@" >/dev/null 2>&1; then
+        echo "ERROR: $* failed" >&2
+        exit 1
+    fi
+}
+
+# debugfs is lenient: it prints "No such file..." / "File not found" but still
+# exits 0, so `run` would not catch a missing write/sif source. Run debugfs,
+# keep its output, and abort on a non-zero exit OR an error phrase (review item
+# 5). "already exists" is benign (idempotent mkdir on a re-run).
+dbg() {
+    local out rc
+    out="$("$@" 2>&1)"; rc=$?
+    if [[ $rc -ne 0 ]] || grep -qiE 'No such file|File not found' <<<"$out"; then
+        echo "ERROR: $* failed (rc=$rc)" >&2
+        printf '%s\n' "$out" >&2
+        exit 1
+    fi
+}
+
 # Sibling checkouts (A10): the split repos live side by side. osb.shell and
 # osbkt provide SHELL.EXE's sources/tooling; osb.core provides the canonical
 # MiniCoreLib. osb.xwin is optional (best-effort staging below).
@@ -66,409 +90,22 @@ printf 'OSB File System test.\nCase-sensitive filenames: ON\nHome is A:\\OSB\\RO
 printf 'root::0:A:\\OSB\\ROOT\n' > "$OBJ/fs/passwd.txt"
 printf 'root\n' > "$OBJ/fs/sudoers.txt"
 
-# Create example OSLANG scripts
+# Boot program: A:\OSB\CONF\BOOT names the program the kernel launches (one
+# line). Defaults to SHELL.EXE; OSB_BOOT_PROGRAM overrides the seed at build
+# time (the golden harness instead patches CONF/BOOT per case on a throwaway
+# image copy — see osb.shell/tests/golden/golden.sh patch_boot).
+printf '%s\n' "${OSB_BOOT_PROGRAM:-A:\\OSB\\BIN\\SHELL.EXE}" > "$OBJ/fs/boot.txt"
+
+# Seed the OSLANG example/regression scripts (kept as files under seed/ so
+# build.sh stays under the 400-line limit; review item 7).
 mkdir -p "$OBJ/fs/apps"
-cat > "$OBJ/fs/apps/simple.osl" <<'EOF'
-USING OSL.CONSOLE
+cp "$ROOT"/seed/apps/*.osl "$OBJ/fs/apps/"
 
-PRINT "Hello from OSLANG 0.72!"
-x = 10
-y = 20
-PRINT "x + y = " + STR(x + y)
-IF x < y THEN
-    PRINT "x is less than y"
-END
-PRINT "Testing enum..."
-PRINT "KEYCODE = " + STR(KEYCODE)
-PRINT "KEYCODE.UNKNOWN = " + STR(KEYCODE.UNKNOWN)
-PRINT "KEYCODE.ENTER = " + STR(KEYCODE.ENTER)
-PRINT "KEYCODE.ESC = " + STR(KEYCODE.ESC)
-PRINT "KEYCODE.SPACE = " + STR(KEYCODE.SPACE)
-PRINT "KEYCODE.UP = " + STR(KEYCODE.UP)
-PRINT "KEYCODE.DOWN = " + STR(KEYCODE.DOWN)
-PRINT "KEYCODE.LEFT = " + STR(KEYCODE.LEFT)
-PRINT "KEYCODE.RIGHT = " + STR(KEYCODE.RIGHT)
-PRINT "KEYCODE.F1 = " + STR(KEYCODE.F1)
-PRINT "KEYCODE.F12 = " + STR(KEYCODE.F12)
-PRINT "Testing enum flags (bitwise OR)..."
-flags = KEYCODE.UP | KEYCODE.DOWN
-PRINT "UP | DOWN = " + STR(flags)
-PRINT "Done."
-EOF
-
-cat > "$OBJ/fs/apps/hello.osl" <<'EOF'
-USING OSL.CONSOLE
-
-FUNCTION MAIN()
-    PRINT "Hello from OSLANG 0.72!"
-END FUNCTION
-EOF
-
-cat > "$OBJ/fs/apps/trycatch.osl" <<'EOF'
-USING OSL.CONSOLE
-
-PRINT "=== Testing TRY/CATCH ==="
-
-PRINT "Test 1: Simple TRY without error..."
-TRY
-    PRINT "In TRY block"
-CATCH err
-    PRINT "Should not reach here: " + err
-END
-PRINT "After TRY/CATCH"
-
-PRINT ""
-PRINT "Test 2: CATCH division by zero..."
-TRY
-    x = 1 / 0
-    PRINT "Should not reach here"
-CATCH err
-    PRINT "Caught error: " + err
-END
-PRINT "After TRY/CATCH - continuing"
-
-PRINT ""
-PRINT "Test 3: CATCH invalid array index..."
-TRY
-    a = [1, 2, 3]
-    x = a[10]
-    PRINT "Should not reach here"
-CATCH err
-    PRINT "Caught error: " + err
-END
-PRINT "After TRY/CATCH - continuing"
-
-PRINT ""
-PRINT "All TRY/CATCH tests passed!"
-EOF
-
-cat > "$OBJ/fs/apps/test_func.osl" <<'EOF'
-USING OSL.CONSOLE
-FUNCTION MAIN()
-    PRINT "OK"
-END FUNCTION
-EOF
-
-cat > "$OBJ/fs/apps/enum_demo.osl" <<'EOF'
-ENUM PERMISSION
-    READ = 1
-    WRITE = 2
-    EXECUTE = 4
-END ENUM
-
-FUNCTION MAIN()
-    PRINT "OK"
-END FUNCTION
-EOF
-
-cat > "$OBJ/fs/apps/class_demo.osl" <<'EOF'
-USING OSL.CONSOLE
-
-CLASS Animal
-    PUBLIC name
-    CONSTRUCTOR(n)
-        PRINT "Constructor called with: " + n
-        ME.name = n
-        PRINT "After assignment, ME.name = " + ME.name
-    END CONSTRUCTOR
-    FUNCTION Speak()
-        PRINT "Animal sound"
-    END FUNCTION
-END CLASS
-
-CLASS Dog : Animal
-    FUNCTION Speak()
-        PRINT "Woof! I am " + ME.name
-    END FUNCTION
-END CLASS
-
-FUNCTION MAIN()
-    d = NEW Dog("Rex")
-    d.Speak()
-    PRINT "Class demo done."
-END FUNCTION
-EOF
-
-cat > "$OBJ/fs/apps/simple_class.osl" <<'EOF'
-USING OSL.CONSOLE
-
-CLASS Point
-    PUBLIC x
-    PUBLIC y
-    CONSTRUCTOR(x, y)
-        ME.x = x
-        ME.y = y
-    END CONSTRUCTOR
-    FUNCTION Display()
-        PRINT "Point: " + ME.x + ", " + ME.y
-    END FUNCTION
-END CLASS
-
-FUNCTION MAIN()
-    p = NEW Point(10, 20)
-    p.Display()
-    PRINT "Simple class test done."
-END FUNCTION
-EOF
-
-cat > "$OBJ/fs/apps/dowhile.osl" <<'EOF'
-USING OSL.CONSOLE
-
-PRINT "Testing DO WHILE with comparison..."
-i = 0
-DO
-    PRINT "i = " + STR(i)
-    i = i + 1
-WHILE i < 3
-PRINT "Comparison test done!"
-
-PRINT ""
-PRINT "Testing DO WHILE with FALSE..."
-j = 0
-DO
-    PRINT "j = " + STR(j)
-    j = j + 1
-WHILE FALSE
-PRINT "FALSE test done (loop should not repeat)!"
-EOF
-
-# Regression for the runtime budgets (B5-B7): recursion to a legal depth, a
-# runaway recursion that must produce a catchable error instead of smashing the
-# 16 KiB boot stack, and KEY enum lookups that walk the whole member table.
-# Run it with: OSLANG A:\OSB\APPS\PHASE0.OSL
-cat > "$OBJ/fs/apps/phase0.osl" <<'EOF'
-FUNCTION FACT(n)
-    IF n <= 1 THEN
-        RETURN 1
-    END
-    RETURN n * FACT(n - 1)
-END FUNCTION
-
-FUNCTION DOWN(n)
-    RETURN DOWN(n + 1)
-END FUNCTION
-
-FUNCTION MAIN()
-    PRINT "-- recursion within the limit --"
-    PRINT "5! = " + FACT(5)
-    PRINT "8! = " + FACT(8)
-
-    PRINT "-- runaway recursion is caught --"
-    TRY
-        PRINT DOWN(0)
-        PRINT "never"
-    CATCH e
-        PRINT "caught: " + e
-    END
-    PRINT "still alive"
-
-    PRINT "-- the KEYCODE enum table is complete --"
-    PRINT KEYCODE.UNKNOWN
-    PRINT KEYCODE.ENTER
-    PRINT KEYCODE.ESC
-    PRINT KEYCODE.BACKSPACE
-    PRINT KEYCODE.PAGEDOWN
-    PRINT KEYCODE.F1
-    PRINT KEYCODE.F12
-
-    PRINT "DONE"
-END FUNCTION
-EOF
-
-# Regression for the Phase 1 interpreter fixes: field writes through a bare
-# identifier (B2), array literals and indexing (B3), and CATCH across a call
-# boundary (B4). Run it with: OSLANG A:\OSB\APPS\PHASE1.OSL
-cat > "$OBJ/fs/apps/phase1.osl" <<'EOF'
-USING OSL.CONSOLE
-
-FUNCTION RAISER()
-    RETURN NOSUCHNAME
-END FUNCTION
-
-CLASS BOX
-    PUBLIC VALUE
-    CONSTRUCTOR(v)
-        VALUE = v
-    END CONSTRUCTOR
-    FUNCTION PUT(v)
-        VALUE = v
-    END FUNCTION
-    FUNCTION GET()
-        RETURN VALUE
-    END FUNCTION
-END CLASS
-
-FUNCTION SHADOW()
-    VALUE = "local"
-    PRINT "fn sees: " + VALUE
-END FUNCTION
-
-FUNCTION MAIN()
-    PRINT "-- 1. constructor writes the field (bare name) --"
-    b = NEW BOX(5)
-    PRINT "value=" + b.GET()
-
-    PRINT "-- 2. method writes the field, then reads it --"
-    b.PUT(9)
-    PRINT "value=" + b.GET()
-
-    PRINT "-- 3. a local with the same name still wins --"
-    SHADOW()
-    PRINT "field untouched: " + b.GET()
-
-    PRINT "-- 4. arrays --"
-    a = [10, 20, 30]
-    PRINT "count=" + COUNT(a)
-    PRINT "a[0]=" + a[0] + " a[2]=" + a[2]
-    a[1] = 99
-    PRINT "a[1]=" + a[1]
-    m = [[1, 2], [3, 4]]
-    PRINT "nested m[1][0]=" + m[1][0]
-
-    PRINT "-- 5. CATCH across a call --"
-    TRY
-        RAISER()
-        PRINT "never"
-    CATCH e1
-        PRINT "caught call: " + e1
-    END
-
-    PRINT "-- 6. CATCH inside a method --"
-    TRY
-        b.PUT(NOSUCHNAME)
-    CATCH e2
-        PRINT "caught method: " + e2
-    END
-
-    PRINT "-- 7. globals --"
-    GLOBAL G = 42
-    PRINT "G=" + G
-
-    PRINT "DONE"
-END FUNCTION
-EOF
-
-# Regression for the Phase 2 features: methods on primitive values, the MATH
-# namespace, SWITCH, postfix ++/--, inherited and self method dispatch, member
-# visibility, and printing arrays/objects. Run it with:
-#   OSLANG A:\OSB\APPS\PHASE2.OSL
-cat > "$OBJ/fs/apps/phase2.osl" <<'EOF'
-CLASS SHAPE
-    PRIVATE ID
-    PROTECTED SIDES
-    PUBLIC NAME
-    CONSTRUCTOR(label, sideCount)
-        ID = "s" + sideCount
-        SIDES = sideCount
-        NAME = label
-    END CONSTRUCTOR
-    PUBLIC FUNCTION AREA()
-        RETURN SIDES
-    END FUNCTION
-    PUBLIC FUNCTION TAG()
-        RETURN ID
-    END FUNCTION
-    PRIVATE FUNCTION SECRET()
-        RETURN 7
-    END FUNCTION
-    PUBLIC FUNCTION VIA()
-        RETURN SECRET()
-    END FUNCTION
-    PUBLIC FUNCTION SHOW()
-        PRINT "shape " + NAME + " sides=" + SIDES
-    END FUNCTION
-END CLASS
-
-CLASS SQUARE : SHAPE
-    CONSTRUCTOR(label)
-        BASE(label, 4)
-    END CONSTRUCTOR
-    FUNCTION TWICE()
-        ME.SHOW()
-        ME.SHOW()
-    END FUNCTION
-    FUNCTION SIDECOUNT()
-        RETURN SIDES
-    END FUNCTION
-END CLASS
-
-FUNCTION GRADE(score)
-    SWITCH score
-        CASE 10
-            PRINT "perfect"
-        CASE 7
-            PRINT "good"
-        CASE 4
-            PRINT "poor"
-        DEFAULT
-            PRINT "fail"
-    END
-END FUNCTION
-
-FUNCTION MAIN()
-    PRINT "-- 1. STRING methods --"
-    PRINT "  " + "abc".TOUPPER() + " " + "ABC".TOLOWER()
-    PRINT "  [" + "  pad  ".TRIM() + "] len=" + "hello".LENGTH
-    PRINT "  " + "hello".STARTSWITH("he") + " " + "hello".ENDSWITH("LO")
-    PRINT "  idx=" + "hello".INDEXOF("l") + " sub=" + "hello".SUBSTR(1, 3)
-    PRINT "  " + "a-b-c".REPLACE("-", "+") + " " + "ab".REPEAT(2)
-    PRINT "  [" + "7".PADSTART(3, "0") + "] " + "a,b".SPLIT(",").JOIN("/")
-
-    PRINT "-- 2. NUMBER methods --"
-    PRINT "  " + (3.7).ABS() + " " + 3.2.CEIL() + " " + 3.9.FLOOR()
-    PRINT "  " + 3.0.ISINTEGER() + " " + 5.BETWEEN(1, 10) + " " + (3.14159).TRUNC(2)
-
-    PRINT "-- 3. ARRAY methods --"
-    a = [3, 1, 2]
-    PRINT "  " + a.COUNT + " first=" + a.FIRST + " last=" + a.LAST
-    a.ADD(4)
-    a.SORT()
-    PRINT "  " + a + " joined=" + a.JOIN(",")
-    PRINT "  popped=" + a.POP() + " -> " + a
-    PRINT "  has 2: " + a.CONTAINS(2) + " nested " + [[1, 2], [3]]
-
-    PRINT "-- 4. MATH namespace --"
-    PRINT "  " + MATH.SQRT(16) + " " + MATH.POW(2, 8) + " " + MATH.MIN(3, 8)
-    PRINT "  " + MATH.SIGN(-9) + " " + MATH.ROUND(2.567, 1) + " " + MATH.CLAMP(15, 0, 10)
-
-    PRINT "-- 5. SWITCH --"
-    GRADE(10)
-    GRADE(7)
-    GRADE(4)
-    GRADE(1)
-
-    PRINT "-- 6. postfix ++ / -- --"
-    i = 5
-    PRINT "  i++ -> " + i++ + " now " + i
-    j = 5
-    PRINT "  j-- -> " + j-- + " now " + j
-    k = 0
-    PRINT "  a[k++] -> " + a[k++]
-
-    PRINT "-- 7. inheritance and self dispatch --"
-    sq = NEW SQUARE("box")
-    sq.TWICE()
-    PRINT "  area=" + sq.AREA() + " tag=" + sq.TAG()
-    PRINT "  protected via subclass=" + sq.SIDECOUNT()
-    PRINT "  private via own method=" + sq.VIA()
-    TRY
-        sq.SECRET()
-    CATCH e3
-        PRINT "  caught: " + e3
-    END
-
-    PRINT "-- 8. TYPEOF and printing --"
-    PRINT "  " + TYPEOF(1) + " " + TYPEOF("s") + " " + TYPEOF(a) + " " + TYPEOF(sq)
-
-    PRINT "DONE"
-END FUNCTION
-EOF
-
-{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/APPS/PHASE0.OSL\n' "$OBJ/fs/apps/phase0.osl"; printf 'write "%s" /OSB/APPS/PHASE1.OSL\n' "$OBJ/fs/apps/phase1.osl"; printf 'write "%s" /OSB/APPS/PHASE2.OSL\n' "$OBJ/fs/apps/phase2.osl"; printf 'write "%s" /OSB/APPS/SIMPLE.OSL\n' "$OBJ/fs/apps/simple.osl"; printf 'write "%s" /OSB/APPS/HELLO.OSL\n' "$OBJ/fs/apps/hello.osl"; printf 'write "%s" /OSB/BIN/KISS.OSL\n' "$OBJ/fs/apps/kiss.osl"; printf 'write "%s" /OSB/APPS/CLASS_DEMO.OSL\n' "$OBJ/fs/apps/class_demo.osl"; printf 'write "%s" /OSB/APPS/SIMPLE_CLASS.OSL\n' "$OBJ/fs/apps/simple_class.osl"; printf 'write "%s" /OSB/APPS/ENUM_DEMO.OSL\n' "$OBJ/fs/apps/enum_demo.osl"; printf 'write "%s" /OSB/APPS/DOWHILE.OSL\n' "$OBJ/fs/apps/dowhile.osl"; printf 'write "%s" /OSB/APPS/TRYCATCH.OSL\n' "$OBJ/fs/apps/trycatch.osl"; printf 'write "%s" /OSB/APPS/TEST_FUNC.OSL\n' "$OBJ/fs/apps/test_func.osl"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; } > "$OBJ/fs/populate2.txt"
-debugfs -w -f "$OBJ/fs/populate2.txt" "$OUT_IMG" >/dev/null 2>&1
+{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/APPS/PHASE0.OSL\n' "$OBJ/fs/apps/phase0.osl"; printf 'write "%s" /OSB/APPS/PHASE1.OSL\n' "$OBJ/fs/apps/phase1.osl"; printf 'write "%s" /OSB/APPS/PHASE2.OSL\n' "$OBJ/fs/apps/phase2.osl"; printf 'write "%s" /OSB/APPS/SIMPLE.OSL\n' "$OBJ/fs/apps/simple.osl"; printf 'write "%s" /OSB/APPS/HELLO.OSL\n' "$OBJ/fs/apps/hello.osl"; printf 'write "%s" /OSB/APPS/CLASS_DEMO.OSL\n' "$OBJ/fs/apps/class_demo.osl"; printf 'write "%s" /OSB/APPS/SIMPLE_CLASS.OSL\n' "$OBJ/fs/apps/simple_class.osl"; printf 'write "%s" /OSB/APPS/ENUM_DEMO.OSL\n' "$OBJ/fs/apps/enum_demo.osl"; printf 'write "%s" /OSB/APPS/DOWHILE.OSL\n' "$OBJ/fs/apps/dowhile.osl"; printf 'write "%s" /OSB/APPS/TRYCATCH.OSL\n' "$OBJ/fs/apps/trycatch.osl"; printf 'write "%s" /OSB/APPS/TEST_FUNC.OSL\n' "$OBJ/fs/apps/test_func.osl"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; printf 'write "%s" /OSB/CONF/BOOT\n' "$OBJ/fs/boot.txt"; } > "$OBJ/fs/populate2.txt"
+dbg debugfs -w -f "$OBJ/fs/populate2.txt" "$OUT_IMG"
 # debugfs "write" does not update the inode/block bitmaps: reconcile them or the
 # kernel's allocators would hand out the seeded files' inodes (e.g. SUDOERS).
-e2fsck -fy "$OUT_IMG" >/dev/null 2>&1
+run e2fsck -fy "$OUT_IMG"
 
 # ----- stage the external XWIN.EXE (optional, best-effort) -----
 XWIN_ROOT=""
@@ -479,8 +116,8 @@ if [[ -n "$XWIN_ROOT" && -x "$XWIN_ROOT/build.sh" ]]; then
     mkdir -p "$OBJ/fs/xwin_stage"
     if STAGE_BIN="$OBJ/fs/xwin_stage" "$XWIN_ROOT/build.sh" > "$OBJ/xwin_stage.log" 2>&1; then
         if [[ -f "$OBJ/fs/xwin_stage/XWIN.EXE" ]]; then
-            debugfs -w -R "write \"$OBJ/fs/xwin_stage/XWIN.EXE\" /OSB/BIN/XWIN.EXE" "$OUT_IMG" >/dev/null 2>&1
-            e2fsck -fy "$OUT_IMG" >/dev/null 2>&1
+            dbg debugfs -w -R "write \"$OBJ/fs/xwin_stage/XWIN.EXE\" /OSB/BIN/XWIN.EXE" "$OUT_IMG"
+            run e2fsck -fy "$OUT_IMG"
             echo "  staged /OSB/BIN/XWIN.EXE"
         fi
     else
@@ -630,57 +267,9 @@ ld.lld -T "$ROOT/linker.ld" -o "$OBJ/kernel.elf" \
 
 # ----- compile ring-3 programs (SHELL.EXE + tests) -----
 echo "[x/6] Compiling ring-3 programs ..."
-# Locate the native AOT compiler shipped with the SDK (NuGet cache).
-ILC_SHELL="$(ls -1d "$HOME"/.nuget/packages/runtime.linux-x64.microsoft.dotnet.ilcompiler/*/tools/ilc 2>/dev/null | sort -V | tail -n1)"
-if [[ -z "$ILC_SHELL" || ! -x "$ILC_SHELL" ]]; then
-    echo "ERROR: ilc (NativeAOT compiler) not found in ~/.nuget/packages." >&2
-    echo "Build the project once (dotnet build) or restore the SDK to fetch it." >&2
-    exit 1
-fi
-
-# Ring-3 entry / syscall shim / runtime helpers (shared osbkt crt0).
-"$CC" -c -nostdlib -ffreestanding -o "$OBJ/userspace.o" \
-    "$ROOT/../osbkt/crt0.S"
-
-# compile_rt3 <module> <csproj> [staged-name] -- build one ring-3 program,
-# link it at UserBase (0x2000000) via osbkt/user.ld (osb_startup = the ilc
-# entry symbol of the module), wrap it as OSBEXE and stage it at
-# /OSB/BIN/<staged-name or module>.EXE with mode 0100755 (F3: every shipped
-# .EXE must be executable).
-compile_rt3() {
-    local module="$1" csproj="$2" staged="${3:-$1}"
-    echo "  building $staged.EXE ..."
-    dotnet build -c Release "$csproj" -v q -nologo
-    local dll
-    dll="$(dirname "$csproj")/bin/Release/net10.0/$module.dll"
-    test -f "$dll" || { echo "ERROR: $dll not produced"; exit 1; }
-    "$ILC_SHELL" "$dll" -o "$OBJ/$module.o" \
-        --systemmodule "$module" \
-        --targetarch x64 --targetos linux \
-        -O -g --directpinvoke:osbnative \
-        --map "$OBJ/$module.map"
-    ld.lld -T "$ROOT/../osbkt/user.ld" -o "$OBJ/$module.elf" \
-        "$OBJ/userspace.o" "$OBJ/$module.o" --no-relax \
-        --defsym="osb_startup=${module}__Module___StartupCodeMain"
-    objcopy -O binary "$OBJ/$module.elf" "$OBJ/$module.bin"
-    python3 "$ROOT/../osbkt/mkosbx.py" "$OBJ/$module.bin" "$OBJ/$module.EXE" 0 >/dev/null
-    debugfs -w -R "write \"$OBJ/$module.EXE\" /OSB/BIN/$staged.EXE" "$OUT_IMG" >/dev/null 2>&1
-    debugfs -w -R "sif /OSB/BIN/$staged.EXE mode 0100755" "$OUT_IMG" >/dev/null 2>&1
-    echo "  staged /OSB/BIN/$staged.EXE (mode 0100755)"
-}
-
-compile_rt3 OsbShell "$ROOT/../osb.shell/Osb.Shell.Userspace.csproj" SHELL
-
-# Ring-3 ABI test programs (run from the shell; see osb.shell/tests/progs).
-for prog in TSpawn TExit TArgs TPrint; do
-    compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
-done
-
-e2fsck -fy "$OUT_IMG" >/dev/null 2>&1
-
-# Report the staged .EXE modes (F3: exec bit must be set).
-echo "  .EXE modes in /OSB/BIN:"
-debugfs -R "ls -l /OSB/BIN" "$OUT_IMG" 2>/dev/null | grep -i "\.EXE" || true
+# shellcheck source=scripts/stage-ring3.sh
+source "$ROOT/scripts/stage-ring3.sh"
+stage_ring3
 
 echo "[5/6] Building ISO ..."
 rm -rf "$ISO_DIR"

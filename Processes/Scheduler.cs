@@ -235,7 +235,8 @@ internal static unsafe partial class Scheduler
         return -1;
     }
 
-    private static void SeedSlot(int slot, ulong entry, string name, int kind)
+    private static void SeedSlot(int slot, ulong entry, string name, int kind,
+        int sessionId, int realUid, int uid, int gid)
     {
         ulong sp;
         fixed (byte* p = _stacks.bytes)
@@ -243,10 +244,14 @@ internal static unsafe partial class Scheduler
         _tasks.sp[slot] = sp;
         _tasks.pid[slot] = _nextPid++;
         _tasks.ppid[slot] = _tasks.pid[_current];
-        _tasks.sessionId[slot] = _tasks.sessionId[_current];   // inherit session
-        _tasks.realUid[slot] = _tasks.realUid[_current];       // inherit real uid
-        _tasks.uid[slot] = _tasks.uid[_current];               // inherit effective uid
-        _tasks.gid[slot] = _tasks.gid[_current];               // inherit gid
+        // Q4: the session/uid fields are set by the caller BEFORE state=READY
+        // (the last line), so a task can never be scheduled with stale
+        // credentials. Normal spawns pass the parent's; the boot program passes
+        // session 1 / uid -1 (it must LOGIN before it can do anything).
+        _tasks.sessionId[slot] = sessionId;
+        _tasks.realUid[slot] = realUid;
+        _tasks.uid[slot] = uid;
+        _tasks.gid[slot] = gid;
         _tasks.state[slot] = Layout.TaskReady;
         _tasks.kind[slot] = kind;
         _tasks.fg[slot] = 0;
@@ -265,7 +270,8 @@ internal static unsafe partial class Scheduler
     {
         int slot = AllocSlot();
         if (slot < 0) return -1;
-        SeedSlot(slot, NativeMethods.osb_sched_get_demo_entry(), "DEMO", Layout.KindDemo);
+        SeedSlot(slot, NativeMethods.osb_sched_get_demo_entry(), "DEMO", Layout.KindDemo,
+            0, 0, 0, 0);   // kernel task: session 0, root
         return slot;
     }
 

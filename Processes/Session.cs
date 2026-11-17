@@ -54,10 +54,21 @@ internal static unsafe partial class Scheduler
     {
         if (!IsLeader(_current)) return -3;
 
+        // Q5: a LOGIN while a user is already logged in first performs the
+        // LOGOUT teardown (kill session tasks except the leader and kernel
+        // tasks, clear the uid), THEN authenticates. The legacy
+        // UserCommands.Login just called SessionSetup and left the old
+        // session's tasks running — a deliberate deviation (see
+        // osb.shell/docs/DEVIATIONS.md and MIGRATION.md).
+        if (_tasks.realUid[_leaderSlot] >= 0) TeardownSession();
+
+        // Q3: reject an empty or over-long name outright; never truncate. A
+        // name that does not fit Users.NameCap is not a valid account name.
+        if (nameLen <= 0 || nameLen >= Users.NameCap) return -3;
+
         char* nbuf = stackalloc char[Users.NameCap];
-        int nlen = nameLen < Users.NameCap - 1 ? nameLen : Users.NameCap - 1;
-        for (int k = 0; k < nlen; k++) nbuf[k] = (char)name[k];
-        int idx = Users.Find(nbuf, nlen);
+        for (int k = 0; k < nameLen; k++) nbuf[k] = (char)name[k];
+        int idx = Users.Find(nbuf, nameLen);
         if (idx < 0) return -3;                       // unknown user
 
         char* pbuf = stackalloc char[Users.PassCap];
@@ -83,6 +94,15 @@ internal static unsafe partial class Scheduler
     public static int Logout()
     {
         if (!IsLeader(_current)) return -3;
+        TeardownSession();
+        return 0;
+    }
+
+    // Q5/Q2: kill every task in the session except the leader and kernel tasks
+    // (session 0), then clear the leader's uid. Shared by LOGOUT and a re-LOGIN
+    // so the two paths cannot drift.
+    private static void TeardownSession()
+    {
         int sid = _sessionId;
         for (int i = 0; i < Count; i++)
         {
@@ -93,7 +113,6 @@ internal static unsafe partial class Scheduler
         _tasks.uid[_leaderSlot] = -1;
         _tasks.realUid[_leaderSlot] = -1;
         _tasks.gid[_leaderSlot] = -1;
-        return 0;
     }
 
     // 67h SUDO() -> 0 ok, -3 if the session user is not in SUDOERS.

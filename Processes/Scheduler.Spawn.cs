@@ -27,7 +27,9 @@ internal static unsafe partial class Scheduler
 
         if (!AddressSpace.Create(src, end)) return SpawnResult.OutOfMemory;
 
-        SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), ProgramName(prog), Layout.KindUser);
+        SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), ProgramName(prog), Layout.KindUser,
+            _tasks.sessionId[_current], _tasks.realUid[_current],
+            _tasks.uid[_current], _tasks.gid[_current]);
         _tasks.arg[slot] = Layout.UserBase;                 // entry RIP in the private block
         _tasks.cr3[slot] = AddressSpace.Cr3;
         _tasks.ublock[slot] = AddressSpace.Block;
@@ -60,7 +62,7 @@ internal static unsafe partial class Scheduler
     // starts with the 16-byte OSBEXE header ("OSBX", version, entry offset,
     // image size); the code lands at UserBase and the process enters ring 3 at
     // UserBase + entry. Returns why it refused, for the shell to explain.
-    public static SpawnResult SpawnFile(char* path, int pathLen, int parentSlot, out int pid)
+    public static SpawnResult SpawnFile(char* path, int pathLen, int parentSlot, out int pid, bool boot = false)
     {
         pid = -1;
         if (!Ext4.Mount()) return SpawnResult.NotFound;
@@ -69,14 +71,14 @@ internal static unsafe partial class Scheduler
         byte* inode = stackalloc byte[256];
         if (!Ext4.ReadInode(ino, inode)) return SpawnResult.NotFound;
         if (!Ext4.IsReg(Ext4.InodeGetMode(inode))) return SpawnResult.NotFound;
-        return SpawnFileInode(ino, path, pathLen, parentSlot, out pid);
+        return SpawnFileInode(ino, path, pathLen, parentSlot, out pid, boot);
     }
 
     // Load and start an executable file whose inode is already resolved (the
     // 6Ah path resolves + checks type/exec first, then calls this so a refusal
     // leaves no task behind). `path`/`pathLen` are used only to derive the task
     // name. Same OSBX header contract as SpawnFile.
-    public static SpawnResult SpawnFileInode(uint ino, char* path, int pathLen, int parentSlot, out int pid)
+    public static SpawnResult SpawnFileInode(uint ino, char* path, int pathLen, int parentSlot, out int pid, bool boot = false)
     {
         pid = -1;
         byte* buf = ImgData();
@@ -111,7 +113,17 @@ internal static unsafe partial class Scheduler
         }
         for (int k = start; k < pathLen && nl < 15; k++) nm[nl++] = path[k];
 
-        SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), "USER", Layout.KindUser);
+        if (boot)
+            // Q4: the boot program (the shell) is the session leader of a fresh
+            // session that starts with NO uid. Set session 1 / uid -1 BEFORE
+            // state=READY (inside SeedSlot) so it can never run for even one tick
+            // with the Console's uid 0 / session 0.
+            SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), "USER", Layout.KindUser,
+                1, -1, -1, -1);
+        else
+            SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), "USER", Layout.KindUser,
+                _tasks.sessionId[_current], _tasks.realUid[_current],
+                _tasks.uid[_current], _tasks.gid[_current]);
         SetNameChars(slot, nm, nl);
         _tasks.arg[slot] = Layout.UserBase + entryOff;   // user RIP in the private block
         _tasks.cr3[slot] = AddressSpace.Cr3;

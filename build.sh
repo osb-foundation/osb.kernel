@@ -91,9 +91,9 @@ printf 'OSB File System test.\nCase-sensitive filenames: ON\nHome is A:\\OSB\\RO
 # and a non-root sudoer (sudoer, uid 2) for the 1c security tests (I5); the
 # default image ships root only.
 if [[ "${WITH_TESTS:-0}" == "1" ]]; then
-    printf 'root::0:A:\\OSB\\ROOT\ntester:pw:1:A:\\OSB\\HOME\\tester\nsudoer:pw:2:A:\\OSB\\HOME\\sudoer\n' > "$OBJ/fs/passwd.txt"
+    printf 'root::0:A:\\OSB\\ROOT\ntester:pw:1:A:\\OSB\\HOME\\tester\nsudoer:pw:2:A:\\OSB\\HOME\\sudoer\nabcdefghijklmno:pw:3:A:\\OSB\\HOME\\abcdefghijklmno\n' > "$OBJ/fs/passwd.txt"
     printf 'root\nsudoer\n' > "$OBJ/fs/sudoers.txt"
-    printf 'mkdir /OSB/HOME/tester\nmkdir /OSB/HOME/sudoer\n' >> "$OBJ/fs/populate.txt"
+    printf 'mkdir /OSB/HOME/tester\nmkdir /OSB/HOME/sudoer\nmkdir /OSB/HOME/abcdefghijklmno\n' >> "$OBJ/fs/populate.txt"
 else
     printf 'root::0:A:\\OSB\\ROOT\n' > "$OBJ/fs/passwd.txt"
     printf 'root\n' > "$OBJ/fs/sudoers.txt"

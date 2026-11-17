@@ -90,7 +90,10 @@ namespace Osb.Kernel
             }
         }
         int pid;
-        var r = Scheduler.SpawnFile(boot, bootLen, Scheduler.Console, out pid);
+        // Q4: boot=true so the boot program is created with session 1 / uid -1
+        // BEFORE it becomes READY (see Scheduler.Spawn.SpawnFileInode). It can
+        // therefore never run for even one tick with the Console's uid 0.
+        var r = Scheduler.SpawnFile(boot, bootLen, Scheduler.Console, out pid, boot: true);
         if (r != SpawnResult.Ok)
         {
             // If we cannot launch the boot program, halt the system.

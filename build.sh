@@ -140,7 +140,12 @@ if [[ -z "$ILC" || ! -x "$ILC" ]]; then
 fi
 
 echo "[1/6] Compiling C# (managed, mini-CoreLib) ..."
-dotnet build -c Release "$ROOT/Osb.Kernel.csproj" -v q -nologo
+# WITH_TESTS=1 (H-B): build the kernel so it honors A:\OSB\CONF/BOOT, letting
+# the golden harness boot a test program directly. The default build always
+# boots SHELL.EXE regardless of CONF/BOOT.
+BOOT_CONF_ARG=""
+if [[ "${WITH_TESTS:-0}" == "1" ]]; then BOOT_CONF_ARG="-p:BootFromConf=true"; fi
+dotnet build -c Release "$ROOT/Osb.Kernel.csproj" -v q -nologo $BOOT_CONF_ARG
 
 DLL="$ROOT/bin/Release/net10.0/OsbKernel.dll"
 test -f "$DLL" || { echo "ERROR: $DLL not produced"; exit 1; }

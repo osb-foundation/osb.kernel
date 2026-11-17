@@ -180,7 +180,11 @@ internal static unsafe class SyscallGfx
     private static bool UserPtr(ulong p, int n)
     {
         if (n < 0) return false;
-        return p >= Layout.UserBase && p + (ulong)n <= Layout.UserLimit;
+        if (n == 0) return p >= Layout.UserBase && p <= Layout.UserLimit;
+        if (p < Layout.UserBase) return false;
+        ulong end = p + (ulong)n;          // may wrap; reject overflow (S3)
+        if (end < p) return false;
+        return end <= Layout.UserLimit;
     }
 
     // Bresenham so XWIN can draw diagonal lines without per-pixel syscalls.

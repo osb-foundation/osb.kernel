@@ -10,6 +10,12 @@
 
     <AssemblyName>OsbKernel</AssemblyName>
 
+    <!-- Boot program source (H-B): default always boots SHELL.EXE. When
+         BootFromConf=true (set by build.sh with WITH_TESTS=1), the kernel
+         also honors A:\OSB\CONF/BOOT so golden cases can boot a test program
+         directly. The default image ignores CONF/BOOT even if present. -->
+    <BootFromConf>false</BootFromConf>
+
     <!-- This is not .NET: it is a freestanding NativeAOT kernel compiled against
          our own mini-CoreLib (MiniCoreLib.cs). No BCL, no runtime. -->
     <NoStdLib>true</NoStdLib>
@@ -18,6 +24,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <DefineConstants>$(DefineConstants);TARGET_64BIT</DefineConstants>
+    <DefineConstants Condition="'$(BootFromConf)' == 'true'">$(DefineConstants);BOOT_FROM_CONF</DefineConstants>
   </PropertyGroup>
 
   <!-- Single MiniCoreLib source: link the canonical copy from osb.core

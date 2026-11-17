@@ -54,18 +54,28 @@ namespace Osb.Kernel
         Vga.WriteLine("Processes: private address space per process (CR3).");
         Vga.WriteLine("Ring 3: user segments + TSS; syscalls via INT 21h (DOS-style).");
         Vga.WriteLine("Files: ATA PIO + ext4 on A:.");
-        Vga.WriteLine("Shell: boot program (default A:\\OSB\\BIN\\SHELL.EXE, A:\\OSB\\CONF\\BOOT overrides)");
+        Vga.WriteLine("Shell: boot program (default A:\\OSB\\BIN\\SHELL.EXE; CONF/BOOT only in WITH_TESTS builds)");
         Vga.WriteLine("Mouse: PS/2 IRQ12 (stream mode).");
         Vga.WriteLine("");
 
         Environment.Init();     // session environment (PATH, PROMPT, USER, ...)
 
         // Hand control to the userspace shell. The boot program is
-        // A:\OSB\CONF\BOOT (first line) when present, else SHELL.EXE; the
-        // golden harness points it at a test program (e.g. TWait.EXE) to
-        // exercise the syscall gate without patching the kernel.
+        // SHELL.EXE by default (H-B). Only WITH_TESTS=1 builds (BOOT_FROM_CONF)
+        // honor A:\OSB\CONF/BOOT so golden cases can boot a test program.
         char* boot = stackalloc char[256];
-        int bootLen = ReadBootProgram(boot, 256);
+        int bootLen;
+#if BOOT_FROM_CONF
+        bootLen = ReadBootProgram(boot, 256);
+#else
+        // Default build: always SHELL.EXE, regardless of any CONF/BOOT file.
+        fixed (char* def = "A:\\OSB\\BIN\\SHELL.EXE")
+        {
+            bootLen = 0;
+            while (def[bootLen] != '\0') bootLen++;
+            for (int i = 0; i < bootLen; i++) boot[i] = def[i];
+        }
+#endif
         if (bootLen <= 0)
         {
             fixed (char* def = "A:\\OSB\\BIN\\SHELL.EXE")

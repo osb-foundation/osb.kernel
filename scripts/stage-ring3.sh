@@ -50,7 +50,7 @@ stage_ring3() {
     # Ring-3 ABI test programs (run from the shell; see osb.shell/tests/progs).
     # Gated behind WITH_TESTS=1 so the default image ships only SHELL.EXE.
     if [[ "${WITH_TESTS:-0}" == "1" ]]; then
-        for prog in TSpawn TExit TArgs TPrint TWait; do
+        for prog in TSpawn TExit TArgs TPrint TWait TPtr; do
             compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
         done
     fi

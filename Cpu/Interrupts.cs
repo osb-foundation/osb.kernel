@@ -111,7 +111,8 @@ internal static unsafe class Interrupts
         if (vector == Layout.KbdVector) // IRQ1: PS/2 controller has a scancode
         {
             byte sc = NativeMethods.inb(0x60);
-            Keyboard.HandleScancode(sc);
+            Keyboard.HandleScancode(sc);     // legacy in-kernel shell path
+            ConsoleInput.PushScancode(sc);   // ring-3 GETCHAR path (cooked)
             Eoi(1);
             return;
         }
@@ -122,8 +123,16 @@ internal static unsafe class Interrupts
             while ((NativeMethods.inb(0x3F8 + 5) & 0x01) != 0)
             {
                 byte c = NativeMethods.inb(0x3F8);
-                if (c == 0x03) ConsoleControl.RequestCtrlC();   // Ctrl+C (consume it)
-                else Serial.Push(c);
+                if (c == 0x03)
+                {
+                    ConsoleControl.RequestCtrlC();   // legacy shell Ctrl+C
+                    ConsoleInput.RequestCtrlC();      // ring-3 GETCHAR Ctrl+C (-2)
+                }
+                else
+                {
+                    Serial.Push(c);                   // legacy shell serial ring
+                    ConsoleInput.PushSerial(c);       // ring-3 GETCHAR serial byte
+                }
             }
             Eoi(4);
             return;

@@ -34,19 +34,29 @@ freestanding kernel and userspace programs:
   shell command loop; instead it can spawn userspace programs via the `SPAWN`
   and `WAIT` syscalls.
 
-* **OsbKT** – a static library that wraps the kernel's INT 21h
-  syscalls in a clean C# API (`PrintString`, `GetChar`, `Exit`, `Spawn`, `Wait`,
-  `MemInfo`, `PutChar`, plus file‑system helpers like `CreateFile`, `OpenFile`,
-  `ReadFile`, `WriteFile`, `DeleteFile`, `CreateDir`, `RemoveDir`, `Rename`,
-  `ResolvePath`, `DirNext`, `GetCwd`, `GetArgs`). Userspace programs link
-  against `OsbKT` and the kernel's `MiniCoreLib` to obtain the necessary
-  `System` types while remaining freestanding.
+* **OsbKT** – a static library that wraps the kernel's INT 21h
+  syscalls in a clean C# API (console: `PrintString`, `PutChar`,
+  `GetKeyScancode`; process: `Exit`, `Spawn`, `Wait`, `GetPid`, `GetABI`;
+  memory: `MemInfo`; read-only fs: `ResolvePath`, `DirNext`; environment:
+  `GetCwd`, `GetArgs`). It also ships the ring-3 infrastructure every
+  userspace program needs: `crt0.S` (startup + INT 21h shim + mem helpers),
+  `user.ld` (link at 0x2000000) and `mkosbx.py` (OSBX packaging). The
+  authoritative ABI contract is `osbkt/docs/ABI.md` — file create/write/
+  delete, directories, environment and cooked input are **not** implemented
+  yet (reserved AH numbers return ENOSYS). Userspace programs consume osbkt
+  and the kernel's MiniCoreLib by **linked sources** (sibling checkouts),
+  so each program stays a single freestanding NativeAOT module.
 
 * **Osb.Shell.Userspace** – a new userspace shell project that implements a simple
   REPL using only `OsbKT` for console I/O and file operations. It is compiled as
   a freestanding NativeAOT executable (`SHELL.EXE`) and placed on the ext4 image
-  at `/OSB/BIN/SHELL.EXE`. The kernel's boot sequence now spawns this userspace
-  shell via the `SPAWN` (`AH=80h`) and `WAIT` (`AH=81h`) syscalls.
+  at `/OSB/BIN/SHELL.EXE`. The kernel's boot sequence spawns this userspace
+  shell directly (`Scheduler.SpawnFile`); `SPAWN`/`WAIT` (AH=80h/81h) remain
+  available to ring-3 programs for built-in test tasks.
+
+The build expects the OSB repos **side by side** (`osb.kernel`, `osb.shell`,
+`osbkt`, `osb.core`; `osb.xwin` optional). `build.sh` fails with a clear
+message when a required sibling repo is missing.
 
 This architecture makes the kernel truly modular: userspace programs (shell,
 OSLANG interpreter, utilities) can be developed, replaced, or extended without
@@ -101,8 +111,9 @@ Main namespaces/classes:
     it filters piped stdin).
 - `Kernel` partial classes
   - Boot orchestration + embedded OSLANG 0.72 interpreter.
-- `MiniCoreLib`
-  - Minimal runtime/type stubs required for freestanding NativeAOT.
+- `MiniCoreLib` (linked from `../osb.core/src/MiniCoreLib.cs`)
+  - Minimal runtime/type stubs required for freestanding NativeAOT; the single
+    canonical copy lives in osb.core — never add a local one here.
 
 Key subsystem concepts:
 
@@ -113,7 +124,8 @@ Key subsystem concepts:
 - Tasks: 8 slots, slot 0 is console/shell.
 - Ring 3 ABI via `INT 21h`: `01h` write, `09h` print, `10h` meminfo, `20h` resolve,
   `21h` dirnext, `22h` getcwd, `23h` getargs, `30h` getpid, `4Ch` exit, `80h`
-  spawn, `81h` wait.
+  spawn, `81h` wait, `82h` getabi, plus `40h-59h` graphics/input. The full
+  contract is `osbkt/docs/ABI.md`.
 - Storage: ATA PIO + simplified ext4 read/write support, mounted as `A:`.
 - User model: accounts, password files, sudoers, ownership/mode checks.
 - Environment: `$VAR`, `SET`, `PROMPT`, history, completion.

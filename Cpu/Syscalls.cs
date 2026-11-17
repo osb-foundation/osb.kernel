@@ -11,6 +11,11 @@ namespace Osb.Kernel.Cpu;
 
 internal static unsafe partial class Syscalls
 {
+    // ABI version reported by GETABI (AH=82h). Bump when this table or its
+    // conventions change incompatibly; osbkt checks it at startup
+    // (osbkt/docs/ABI.md).
+    public const int AbiVersion = 1;
+
     public static void Handle(ulong* frame)
     {
         ulong rax = frame[14];           // full RAX as passed by the user
@@ -65,6 +70,12 @@ internal static unsafe partial class Syscalls
         if (func == 0x81) // wait(pid in RSI): blocks until the child exits
         {
             frame[14] = unchecked((ulong)Scheduler.WaitFor((int)rsi));
+            return;
+        }
+
+        if (func == 0x82) // getabi: ABI version in AX (osbkt/docs/ABI.md)
+        {
+            frame[14] = (ulong)(ushort)AbiVersion;
             return;
         }
 

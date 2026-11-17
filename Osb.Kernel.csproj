@@ -20,6 +20,18 @@
     <DefineConstants>$(DefineConstants);TARGET_64BIT</DefineConstants>
   </PropertyGroup>
 
+  <!-- Single MiniCoreLib source: link the canonical copy from osb.core
+       (sibling checkout, see README.md). -->
+  <ItemGroup>
+    <Compile Include="../osb.core/src/MiniCoreLib.cs" Link="MiniCoreLib.cs" />
+  </ItemGroup>
+
+  <!-- Fail with a clear message when the sibling repo is missing (A10). -->
+  <Target Name="CheckSiblings" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)../osb.core/src/MiniCoreLib.cs')"
+           Text="osb.core sibling repo not found (expected ../osb.core/src/MiniCoreLib.cs). Clone the OSB repos side by side; see README.md." />
+  </Target>
+
   <!-- The project file pretends this is .NET, but it is not. Remove every
        assembly reference the .NET SDK added (matches the zerosharp samples). -->
   <Target Name="CustomizeReferences" BeforeTargets="BeforeCompile" AfterTargets="FindReferenceAssembliesForReferences">

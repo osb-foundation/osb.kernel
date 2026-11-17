@@ -9,8 +9,8 @@ no host operating system, no external framework — compiled with **NativeAOT**
 
 - Boots via **GRUB (Multiboot2)** on x86-64 (long mode), from an ISO (BIOS).
 - C# kernel natively compiled with `ilc` (NativeAOT) against a **custom mini-CoreLib**
-  (`MiniCoreLib.cs`) — the only "libraries" required for the C# compiler to work
-  without an OS.
+  (linked from the `osb.core` sibling repo — the only "libraries" required for the C#
+  compiler to work without an OS).
 - Text output in **VGA text mode** (`0xB8000`) mirrored to **COM1 (serial)**.
 - **IDT (256 gates) + PIC 8259A** remapped (IRQ0-15 → vectors **0x30-0x3F**): CPU
   exceptions become readable panics (vector + RIP), and the **PS/2 keyboard is interrupt-driven**
@@ -57,7 +57,9 @@ no host operating system, no external framework — compiled with **NativeAOT**
   gets its own **2 MiB block** in that window and enters CPL3 via `iretq`. **DOS-like syscalls**
   via `INT 21h` (function in `AH`): `AH=09h` prints a `$`-terminated string (RSI),
   `AH=30h` getpid, `AH=4Ch` exit(code in AL), `AH=80h` spawn(program id),
-  `AH=81h` wait(pid). Failures coming from CPL3 (e.g. `cli` in ring 3 → **#GP**) are
+  `AH=81h` wait(pid), plus `40h-59h` graphics/input (XWIN), `10h` meminfo,
+  `20h/21h/22h/23h` resolve/dirnext/getcwd/getargs and `82h` getabi. The
+  complete ring-3 contract is `osbkt/docs/ABI.md`. Failures coming from CPL3 (e.g. `cli` in ring 3 → **#GP**) are
   **recoverable**: the kernel terminates only that process (becomes zombie, code `-1`) and
   keeps running.
 - **Shutdown/reboot**: `POWEROFF` does ACPI S5 (PM1a_CNT port 0x604) — in QEMU the
@@ -120,10 +122,10 @@ no host operating system, no external framework — compiled with **NativeAOT**
 ## Architecture
 
 ```
-src/Osb.Kernel/
-├── Osb.Kernel.csproj   # "no .NET" C# project: NoStdLib, nothing referenced
-├── MiniCoreLib.cs      # mini-CoreLib: System.Object/String/primitives + stubs the
-│                       # ilc requires from the "system module" (ThrowHelpers, Buffer, TypeCast...)
+Osb.Kernel/            (this repo is the kernel; repos live side by side)
+├── Osb.Kernel.csproj   # "no .NET" C# project: NoStdLib, nothing referenced;
+│                       # links ../osb.core/src/MiniCoreLib.cs (single source)
+├── MiniCoreLib.cs      # (linked from osb.core — do not keep a local copy)
 ├── Kernel.cs           # only orchestration: Main/kmain (boot order) + banner
 ├── Hardware/           # kernel I/O boundary
 │   ├── Vga.cs          # 80x25 text mode (mirrors everything to COM1)
@@ -201,10 +203,14 @@ kernel.elf         ──grub-mkrescue─▶       osb.iso
 
 ## Build and run
 
+The OSB repos are expected **side by side** (sibling checkouts): `osb.kernel`
+(this repo), `osb.shell` (SHELL.EXE sources), `osbkt` (crt0/user.ld/mkosbx.py),
+`osb.core` (MiniCoreLib). `osb.xwin` is optional (staged best-effort).
+`build.sh` fails with a clear message if a required sibling is missing.
+
 ```sh
-cd src/Osb.Kernel
 chmod +x build.sh
-./build.sh            # generates src/Osb.Kernel/osb.iso
+./build.sh            # generates osb.iso (embeds /OSB/BIN/SHELL.EXE)
 ./build.sh run        # build + boot in QEMU (serial in terminal, no window)
 ./build.sh run-gui    # same, but opens the VGA window (careful with input grab)
 ./build.sh check      # validates that kernel.elf is Multiboot2
@@ -242,7 +248,8 @@ releases input.
 
 - ilc is located automatically in the NuGet cache
   (`runtime.linux-x64.microsoft.dotnet.ilcompiler`).
-- `MiniCoreLib.cs` is the boundary of the "runtime": everything C# requires without an OS.
+- The mini-CoreLib (linked from `osb.core/src/MiniCoreLib.cs`) is the boundary of
+  the "runtime": everything C# requires without an OS.
   Keep it small; no GC/allocation — the kernel uses fixed buffers/stackalloc.
 - `interrupts.S` is generated deterministically by `build.sh` (256 stubs: each pushes
   `[vector][dummy]`, discarding the CPU error code on vectors 8/10-14/17).

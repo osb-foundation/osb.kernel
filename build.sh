@@ -6,11 +6,12 @@
 #      mini-CoreLib (MiniCoreLib.cs) -> OsbKernel.dll (managed IL only).
 #   2. ilc (NativeAOT) turns that IL into a bare x86-64 object file, with no
 #      BCL and no runtime.
-#   3. clang assembles the Multiboot2 boot stub (boot.S).
+#   3. $CC assembles the Multiboot2 boot stub (boot.S) and the .S helpers.
 #   4. ld.lld links boot.o + OsbKernel.o with linker.ld into a Multiboot2 ELF.
 #   5. grub-mkrescue wraps it in a bootable ISO (GRUB BIOS).
 #
-# Requires: dotnet (10.x SDK), clang, lld (ld.lld), xorriso, grub-mkrescue.
+# Requires: dotnet (10.x SDK), clang or gcc, lld (ld.lld), xorriso,
+# grub-mkrescue.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -18,6 +19,24 @@ OBJ="$ROOT/obj/kernel"
 ISO_DIR="$ROOT/iso"
 OUT_ISO="$ROOT/osb.iso"
 OUT_IMG="$ROOT/osb.img"
+
+# Assembler for the .S files (GNU syntax; clang preferred, gcc works too).
+if [[ -z "${CC:-}" ]]; then
+    if command -v clang >/dev/null 2>&1; then CC=clang
+    elif command -v gcc >/dev/null 2>&1; then CC=gcc
+    else echo "ERROR: neither clang nor gcc found in PATH." >&2; exit 1; fi
+fi
+
+# Sibling checkouts (A10): the split repos live side by side. osb.shell and
+# osbkt provide SHELL.EXE's sources/tooling; osb.core provides the canonical
+# MiniCoreLib. osb.xwin is optional (best-effort staging below).
+for sib in osb.shell osbkt osb.core; do
+    if [[ ! -d "$ROOT/../$sib" ]]; then
+        echo "ERROR: sibling repo ../$sib not found next to osb.kernel." >&2
+        echo "       Clone the OSB repos side by side (see README.md)." >&2
+        exit 1
+    fi
+done
 
 mkdir -p "$OBJ"
 
@@ -452,8 +471,11 @@ debugfs -w -f "$OBJ/fs/populate2.txt" "$OUT_IMG" >/dev/null 2>&1
 e2fsck -fy "$OUT_IMG" >/dev/null 2>&1
 
 # ----- stage the external XWIN.EXE (optional, best-effort) -----
-XWIN_ROOT="$(cd "$ROOT/../Osb.Xwin" 2>/dev/null && pwd)"
-if [[ -x "$XWIN_ROOT/build.sh" ]]; then
+XWIN_ROOT=""
+if [[ -d "$ROOT/../osb.xwin" ]]; then
+    XWIN_ROOT="$(cd "$ROOT/../osb.xwin" && pwd)"
+fi
+if [[ -n "$XWIN_ROOT" && -x "$XWIN_ROOT/build.sh" ]]; then
     mkdir -p "$OBJ/fs/xwin_stage"
     if STAGE_BIN="$OBJ/fs/xwin_stage" "$XWIN_ROOT/build.sh" > /tmp/opencode/xwin_stage.log 2>&1; then
         if [[ -f "$OBJ/fs/xwin_stage/XWIN.EXE" ]]; then
@@ -597,10 +619,10 @@ isr_common:
     addq $16, %rsp           /* drop [vector][dummy error code] */
     iretq
 ASM
-clang -c -nostdlib -ffreestanding -o "$OBJ/interrupts.o" "$ISR"
-clang -c -nostdlib -ffreestanding -o "$OBJ/boot.o" "$ROOT/boot.S"
-clang -c -nostdlib -ffreestanding -o "$OBJ/sched.o" "$ROOT/sched.S"
-clang -c -nostdlib -ffreestanding -o "$OBJ/user.o" "$ROOT/user.S"
+"$CC" -c -nostdlib -ffreestanding -o "$OBJ/interrupts.o" "$ISR"
+"$CC" -c -nostdlib -ffreestanding -o "$OBJ/boot.o" "$ROOT/boot.S"
+"$CC" -c -nostdlib -ffreestanding -o "$OBJ/sched.o" "$ROOT/sched.S"
+"$CC" -c -nostdlib -ffreestanding -o "$OBJ/user.o" "$ROOT/user.S"
 
 echo "[4/6] Linking kernel.elf ..."
 ld.lld -T "$ROOT/linker.ld" -o "$OBJ/kernel.elf" \
@@ -617,8 +639,8 @@ if [[ -z "$ILC_SHELL" || ! -x "$ILC_SHELL" ]]; then
 fi
 
 # Build managed DLL
-dotnet build -c Release "$ROOT/../Osb.Shell.Userspace/Osb.Shell.Userspace.csproj" -v q -nologo
-DLL_SHELL="$ROOT/../Osb.Shell.Userspace/bin/Release/net10.0/OsbShell.dll"
+dotnet build -c Release "$ROOT/../osb.shell/Osb.Shell.Userspace.csproj" -v q -nologo
+DLL_SHELL="$ROOT/../osb.shell/bin/Release/net10.0/OsbShell.dll"
 test -f "$DLL_SHELL" || { echo "ERROR: $DLL_SHELL not produced"; exit 1; }
 
 # NativeAOT (ilc)
@@ -628,17 +650,19 @@ test -f "$DLL_SHELL" || { echo "ERROR: $DLL_SHELL not produced"; exit 1; }
     -O -g --directpinvoke:osbnative \
     --map "$OBJ/OsbShell.map"
 
-# Ring-3 entry / syscall shim / runtime helpers for the userspace image.
-clang -c -nostdlib -ffreestanding -o "$OBJ/userspace.o" \
-    "$ROOT/../Osb.Shell.Userspace/userspace.S"
+# Ring-3 entry / syscall shim / runtime helpers (shared osbkt crt0).
+"$CC" -c -nostdlib -ffreestanding -o "$OBJ/userspace.o" \
+    "$ROOT/../osbkt/crt0.S"
 
 # Link the userspace shell as a standalone image at UserBase (0x2000000).
-ld.lld -T "$ROOT/../Osb.Xwin/user.ld" -o "$OBJ/OsbShell.elf" \
-    "$OBJ/userspace.o" "$OBJ/OsbShell.o" --no-relax
+# osb_startup is the ilc entry symbol of the consuming module (--defsym).
+ld.lld -T "$ROOT/../osbkt/user.ld" -o "$OBJ/OsbShell.elf" \
+    "$OBJ/userspace.o" "$OBJ/OsbShell.o" --no-relax \
+    --defsym=osb_startup=OsbShell__Module___StartupCodeMain
 
 # Convert to flat binary and wrap as OSBEXE.
 objcopy -O binary "$OBJ/OsbShell.elf" "$OBJ/OsbShell.bin"
-python3 "$ROOT/../Osb.Xwin/mkosbx.py" "$OBJ/OsbShell.bin" "$OBJ/SHELL.EXE" 0
+python3 "$ROOT/../osbkt/mkosbx.py" "$OBJ/OsbShell.bin" "$OBJ/SHELL.EXE" 0
 
 # Write the binary into the ext4 image at /OSB/BIN/SHELL.EXE
 debugfs -w -R "write \"$OBJ/SHELL.EXE\" /OSB/BIN/SHELL.EXE" "$OUT_IMG" >/dev/null 2>&1
@@ -646,14 +670,6 @@ e2fsck -fy "$OUT_IMG" >/dev/null 2>&1
 echo "  staged /OSB/BIN/SHELL.EXE"
 
 echo "[5/6] Building ISO ..."
-rm -rf "$ISO_DIR"
-mkdir -p "$ISO_DIR/boot/grub"
-cp "$OBJ/kernel.elf" "$ISO_DIR/boot/kernel.elf"
-cp "$ROOT/grub.cfg" "$ISO_DIR/boot/grub/grub.cfg"
-cp "$OUT_IMG" "$ISO_DIR/osb.img" 2>/dev/null || true
-grub-mkrescue -o "$OUT_ISO" "$ISO_DIR" >/dev/null
-
-echo "OK -> $OUT_ISO"
 rm -rf "$ISO_DIR"
 mkdir -p "$ISO_DIR/boot/grub"
 cp "$OBJ/kernel.elf" "$ISO_DIR/boot/kernel.elf"

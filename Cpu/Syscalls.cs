@@ -13,8 +13,9 @@ internal static unsafe partial class Syscalls
 {
     // ABI version reported by GETABI (AH=82h). Bump when this table or its
     // conventions change incompatibly; osbkt checks it at startup
-    // (osbkt/docs/ABI.md). v2 (phase 1b): GETCHAR (6Eh) + final SpawnReq 6Ah.
-    public const int AbiVersion = 2;
+    // (osbkt/docs/ABI.md). v3 (phase 1c): 6Ah/20h are byte strings (B1), not
+    // UTF-16 chars, so the v2->v3 wire-format change must be visible to callers.
+    public const int AbiVersion = 3;
 
     public static void Handle(ulong* frame)
     {

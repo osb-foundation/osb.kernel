@@ -92,10 +92,14 @@ internal static unsafe partial class Scheduler
         if (imgSize == 0 || 16 + imgSize > (uint)got) return SpawnResult.BadImage;
         if (entryOff >= imgSize) return SpawnResult.BadImage;
 
-        if (!AddressSpace.CreateBuf(buf + 16, (int)imgSize)) return SpawnResult.OutOfMemory;
-
+        // AllocSlot BEFORE CreateBuf (P0.5): if there is no free slot we return
+        // NoSlot without having allocated an address space, so its frames are
+        // not leaked. (AllocSlot only reads state; it does not reserve, so a
+        // later CreateBuf failure leaves the slot free for reuse.)
         int slot = AllocSlot();
         if (slot < 0) return SpawnResult.NoSlot;
+
+        if (!AddressSpace.CreateBuf(buf + 16, (int)imgSize)) return SpawnResult.OutOfMemory;
 
         // the task name is the file's base name, like the shell's "MEM.EXE"
         char* nm = stackalloc char[16];

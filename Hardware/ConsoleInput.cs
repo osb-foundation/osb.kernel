@@ -2,9 +2,11 @@
 //
 // Merges the two hardware input sources into one byte stream:
 //   * serial (COM1, IRQ4) bytes are already ASCII -> pushed as-is
-//   * PS/2 (IRQ1) scancodes are translated to ASCII here (shift/extended)
-// Ctrl+C is delivered as a one-shot -2 (once per press) instead of a byte, so
-// a ring-3 line reader can abort its line exactly once. The legacy in-kernel
+//   * PS/2 (IRQ1) scancodes are translated to ASCII here (shift/caps/extended)
+// Ctrl+C is delivered IN BAND: the ring holds ushort entries (0..255 = a byte,
+// 0x100 = a Ctrl+C marker), so Pop returns bytes and -2 in the exact arrival
+// order. A line typed before Ctrl+C is consumed (and then discarded by the
+// aborting reader); a line typed after it is a new line. The legacy in-kernel
 // shell keeps its own ConsoleControl path; this class is only for ring 3.
 
 using Osb.Kernel.Memory;
@@ -13,19 +15,23 @@ namespace Osb.Kernel.Hardware;
 
 internal static unsafe class ConsoleInput
 {
-    // Cooked byte ring (ASCII from serial or translated PS/2).
-    private unsafe struct ByteRing
+    // Marker pushed into the ring for a Ctrl+C press. Bytes are 0..255, so
+    // 0x100 can never collide with a real byte.
+    private const ushort CtrlCMark = 0x100;
+
+    // Cooked entry ring: a byte (0..255) or CtrlCMark (0x100), in arrival order.
+    private unsafe struct EntryRing
     {
-        public fixed byte data[256];
+        public fixed ushort data[256];
         public int head;
         public int tail;
     }
 
-    private static ByteRing _ring;
+    private static EntryRing _ring;
     private static bool _shift;       // PS/2 shift currently held
     private static bool _ctrl;        // PS/2 ctrl currently held
+    private static bool _caps;        // PS/2 caps lock on/off (toggled)
     private static bool _extended;    // PS/2 0xE0 prefix seen
-    private static int _ctrlC;        // pending Ctrl+C presses (one-shot -> -2)
 
     // Serial path: bytes are already ASCII (control bytes handled by the IRQ).
     public static void PushSerial(byte c)
@@ -39,15 +45,30 @@ internal static unsafe class ConsoleInput
         }
     }
 
+    // A Ctrl+C was pressed (from serial 0x03 or PS/2 Ctrl+C). Pushed IN BAND as
+    // CtrlCMark so Pop returns -2 at the exact arrival position, not after all
+    // buffered bytes have been drained.
+    public static void RequestCtrlC()
+    {
+        int next = _ring.tail + 1;
+        if (next >= 256) next = 0;
+        if (next != _ring.head)
+        {
+            _ring.data[_ring.tail] = CtrlCMark;
+            _ring.tail = next;
+        }
+    }
+
     // PS/2 path: a raw scancode from IRQ1. Translates to ASCII and pushes.
-    // Tracks shift/ctrl so Ctrl+C is caught here (Keyboard consumes it for the
-    // legacy shell; ConsoleInput sees the raw stream and handles it for ring 3).
+    // Tracks shift/ctrl/caps so Ctrl+C is caught here (Keyboard consumes it for
+    // the legacy shell; ConsoleInput sees the raw stream and handles it for ring 3).
     public static void PushScancode(byte sc)
     {
         if (sc == 0x2A || sc == 0x36) { _shift = true; return; }   // shift down
         if (sc == 0xAA || sc == 0xB6) { _shift = false; return; }  // shift up
         if (sc == 0x1D) { _ctrl = true; return; }                  // ctrl down
         if (sc == 0x9D) { _ctrl = false; return; }                 // ctrl up
+        if (sc == 0x3A) { _caps = !_caps; return; }                // caps lock toggle
         if (sc == 0xE0) { _extended = true; return; }              // extended prefix
 
         if (_extended)
@@ -69,7 +90,7 @@ internal static unsafe class ConsoleInput
             }
         }
 
-        if (sc == 0x2E && _ctrl) { RequestCtrlC(); return; }       // Ctrl+C (one-shot)
+        if (sc == 0x2E && _ctrl) { RequestCtrlC(); return; }       // Ctrl+C (in band)
         if (sc == 0x3E && _ctrl) return;                           // Ctrl+F4: not cooked
 
         if ((sc & 0x80) != 0) return;   // ignore break codes
@@ -79,44 +100,39 @@ internal static unsafe class ConsoleInput
         if (sc == 0x0F) { PushSerial((byte)'\t'); return; }   // Tab
 
         char c = Keyboard.MapScancode(sc, _shift);
+        // ConsoleInput only: letters are lowercase unless Shift XOR CapsLock.
+        // (The legacy Keyboard.MapScancode always returns uppercase and is left
+        // untouched; see MIGRATION.md for the decision.)
+        if (c >= 'A' && c <= 'Z' && !(_shift ^ _caps)) c = (char)(c + 32);
         if (c != 0) PushSerial((byte)c);
     }
 
-    // A Ctrl+C was pressed (from serial 0x03 or PS/2 Ctrl+C). Counted so the
-    // GETCHAR caller sees -2 exactly once per press.
-    public static void RequestCtrlC()
-    {
-        if (_ctrlC < 0x7FFFFFFF) _ctrlC++;
-    }
-
-    // S2: drop any buffered cooked bytes and pending Ctrl+C. Called when a new
-    // foreground program is spawned so stale input (or a -2 from a previous
-    // line) does not leak into the next program.
+    // S2: drop any buffered cooked bytes and a pending Ctrl+C. Called when a new
+    // foreground program is spawned so stale input (or a Ctrl+C from a previous
+    // line) does not leak into the next program. Physical modifier state
+    // (_shift/_ctrl) is PRESERVED: a spawn must not forget that Shift is held.
+    // (Flush-on-spawn moves to the foreground hand-off in slice 6, where a
+    // background spawn must not eat the shell's type-ahead.)
     public static void Flush()
     {
         _ring.head = 0;
         _ring.tail = 0;
-        _ctrlC = 0;
-        _shift = false;
-        _ctrl = false;
-        _extended = false;
     }
 
     // GETCHAR result: next cooked byte (0..255), -1 when empty, -2 for a
-    // pending Ctrl+C (consumed once). Non-blocking. Buffered bytes are drained
-    // before the Ctrl+C so a line typed before Ctrl+C is consumed (and then
-    // discarded by the aborting reader), not leaked into the next line.
+    // Ctrl+C marker, in arrival order (non-blocking). Ctrl+C is no longer
+    // deferred behind buffered bytes.
     public static int Pop()
     {
         if (_ring.head != _ring.tail)
         {
-            byte c = _ring.data[_ring.head];
+            ushort e = _ring.data[_ring.head];
             int next = _ring.head + 1;
             if (next >= 256) next = 0;
             _ring.head = next;
-            return c;
+            if (e == CtrlCMark) return -2;
+            return e;
         }
-        if (_ctrlC > 0) { _ctrlC--; return -2; }
         return -1;
     }
 }

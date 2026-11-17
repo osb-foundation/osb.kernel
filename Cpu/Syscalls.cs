@@ -71,11 +71,14 @@ internal static unsafe partial class Syscalls
         {
             // RDI points to a SpawnReq { u64 pathPtr; u32 pathLen; u64 argsPtr;
             // u32 argsLen; i32 stdinH; i32 stdoutH; } (osbkt/docs/ABI.md).
-            // Validate the block, then the path/args it points at. -3 EACCES if
-            // the file is not executable by the caller, -4 ENOENT, -5 EINVAL,
-            // -6 ENOMEM. stdin/stdout handles are not yet wired (phase 1b
-            // keeps console stdio; a non -1 handle is rejected -5 for now).
-            if (!UserPtr(rdi, 40)) { frame[14] = unchecked((ulong)-5); return; } // EINVAL
+            // All string arguments are BYTE strings (B1); the kernel uses the
+            // true byte length. Order (B3): validate the block, resolve the
+            // path, check it is a regular file and that the caller may execute
+            // it, THEN load and spawn — a refusal (EACCES/ENOENT/EINVAL) never
+            // creates a task. Error codes (B4): any bad pointer (block, path,
+            // args) -> -1 EFAULT; bad content (pathLen 0 or >260, argsLen >128,
+            // handle != -1) -> -5 EINVAL. -3 EACCES, -4 ENOENT, -6 ENOMEM.
+            if (!UserPtr(rdi, 40)) { frame[14] = unchecked((ulong)-1); return; } // EFAULT
             byte* req = (byte*)rdi;
             ulong pathPtr = Rd64(req, 0);
             uint pathLen = Rd32(req, 8);
@@ -84,28 +87,51 @@ internal static unsafe partial class Syscalls
             int stdinH = (int)Rd32(req, 32);
             int stdoutH = (int)Rd32(req, 36);
 
-            if (pathLen == 0 || pathLen > 260 ||
-                argsLen > 128 ||
-                !UserPtr(pathPtr, (int)pathLen) ||
-                (argsLen > 0 && !UserPtr(argsPtr, (int)argsLen)) ||
+            // Content checks first (EINVAL). The block length fields must be in
+            // range and the handles must be "inherit" (-1) for now.
+            if (pathLen == 0 || pathLen > 260 || argsLen > 128 ||
                 stdinH != -1 || stdoutH != -1)
             {
                 frame[14] = unchecked((ulong)-5); // EINVAL
                 return;
             }
+            // Then pointer checks (EFAULT) using the true byte length.
+            if (!UserPtr(pathPtr, (int)pathLen) ||
+                (argsLen > 0 && !UserPtr(argsPtr, (int)argsLen)))
+            {
+                frame[14] = unchecked((ulong)-1); // EFAULT
+                return;
+            }
+
+            // Resolve + type + exec checks BEFORE any task is created (B3).
+            // B1: the path/args are BYTE strings at the ABI; convert them to
+            // the char* (UTF-16) form the Ext4/Scheduler layer uses.
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)pathLen; i++) cpath[i] = (char)((byte*)pathPtr)[i];
+            if (!Ext4.Mount()) { frame[14] = unchecked((ulong)-4); return; } // ENOENT
+            uint ino;
+            if (!Ext4.Resolve(cpath, (int)pathLen, out ino)) { frame[14] = unchecked((ulong)-4); return; }
+            byte* inode = stackalloc byte[256];
+            if (!Ext4.ReadInode(ino, inode)) { frame[14] = unchecked((ulong)-4); return; }
+            ushort mode = Ext4.InodeGetMode(inode);
+            if (!Ext4.IsReg(mode)) { frame[14] = unchecked((ulong)-4); return; }   // ENOENT (not a file)
+            if (!SpawnExecutable(mode, Ext4.InodeGetUid(inode), Ext4.InodeGetGid(inode)))
+            { frame[14] = unchecked((ulong)-3); return; }                          // EACCES
 
             int pid;
-            SpawnResult r = Scheduler.SpawnFile((char*)pathPtr, (int)pathLen, Scheduler.Current, out pid);
-            if (r == SpawnResult.NotFound) { frame[14] = unchecked((ulong)-4); return; }   // ENOENT
+            SpawnResult r = Scheduler.SpawnFileInode(ino, cpath, (int)pathLen, Scheduler.Current, out pid);
             if (r == SpawnResult.BadImage) { frame[14] = unchecked((ulong)-4); return; }   // ENOENT (no valid image)
             if (r == SpawnResult.OutOfMemory) { frame[14] = unchecked((ulong)-6); return; } // ENOMEM
             if (r == SpawnResult.NoSlot) { frame[14] = unchecked((ulong)-6); return; }     // ENOMEM
-            // r == Ok: check the exec bit for the caller (root always passes).
-            if (!SpawnExecutable(pathPtr, (int)pathLen)) { frame[14] = unchecked((ulong)-3); return; } // EACCES
 
             int slot;
             if (argsLen > 0 && Scheduler.TryFindPid(pid, out slot))
-                Scheduler.SetArgs(slot, (char*)argsPtr, (int)argsLen);
+            {
+                // B1: convert the byte args to char* for SetArgs.
+                char* cargs = stackalloc char[128];
+                for (int i = 0; i < (int)argsLen; i++) cargs[i] = (char)((byte*)argsPtr)[i];
+                Scheduler.SetArgs(slot, cargs, (int)argsLen);
+            }
             frame[14] = (ulong)pid;
             return;
         }
@@ -163,15 +189,27 @@ internal static unsafe partial class Syscalls
 
         if (func == 0x20) // resolve(path in RDI, len in RSI, out in RDX)
         {
-            // out: [u32 ino, u16 mode, u16 uid, u64 size]
-            if (!UserPtr(rdi, (int)(rsi > 260 ? 260 : rsi)) || !UserPtr(rdx, 16))
+            // out: [u32 ino, u16 mode, u16 uid, u64 size]. The validated
+            // length must be exactly the length used (B2): reject rsi > 260
+            // outright (0 fail), never clamp the check and use the raw value.
+            // B1: the path is a BYTE string; convert to char* (UTF-16) for the
+            // Ext4 layer, which is char-based.
+            ulong len = rsi;
+            if (len > 260)
+            {
+                frame[14] = 0;
+                return;
+            }
+            if (!UserPtr(rdi, (int)len) || !UserPtr(rdx, 16))
             {
                 frame[14] = 0;
                 return;
             }
             if (!Ext4.Mount()) { frame[14] = 0; return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
             uint ino;
-            if (!Ext4.Resolve((char*)rdi, (int)rsi, out ino)) { frame[14] = 0; return; }
+            if (!Ext4.Resolve(cpath, (int)len, out ino)) { frame[14] = 0; return; }
             byte* inode = stackalloc byte[256];
             if (!Ext4.ReadInode(ino, inode)) { frame[14] = 0; return; }
             byte* o = (byte*)rdx;
@@ -265,7 +303,8 @@ internal static unsafe partial class Syscalls
 
         if (func == 0x23) // getargs(buf in RDI, cap in RSI): the argument string
         {
-            ulong cap = rsi > 128 ? 128 : rsi;
+            // cap up to 129 (128 chars + NUL); the returned length is cap-1.
+            ulong cap = rsi > 129 ? 129 : rsi;
             if (!UserPtr(rdi, (int)cap))
             {
                 frame[14] = unchecked((ulong)-1);
@@ -318,21 +357,20 @@ internal static unsafe partial class Syscalls
         return end <= Layout.UserLimit;
     }
 
-    // True when the file at path is executable by the current task: any x bit
-    // for the task's uid, or root (uid 0) always. (D7: legacy had no check.)
-    private static bool SpawnExecutable(ulong pathPtr, int pathLen)
+    // True when the file (mode, uid, gid) is executable by the current task.
+    // The exec bit is checked for the caller's class (B3): owner x for the
+    // file's owner, else group x if the caller's gid matches the file's gid,
+    // else other x — never "any x bit". The current uid/gid come from the
+    // Scheduler (phase 1b: both 0; 1c wires the real session uid).
+    private static bool SpawnExecutable(ushort mode, uint fileUid, uint fileGid)
     {
-        if (!Ext4.Mount()) return false;
-        uint ino;
-        if (!Ext4.Resolve((char*)pathPtr, pathLen, out ino)) return false;
-        byte* inode = stackalloc byte[256];
-        if (!Ext4.ReadInode(ino, inode)) return false;
-        ushort mode = Ext4.InodeGetMode(inode);
-        if (!Ext4.IsReg(mode)) return false;
-        int perm = mode & 0x1FF;                   // low 9 bits = rwx
-        int uid = Scheduler.Get(Scheduler.Current).Pid == 1 ? 0 : -1;
-        // Root (console/session leader uid 0) always passes. Otherwise any x bit.
-        if (uid == 0) return true;
-        return (perm & 0x49) != 0;                 // any x bit (owner/group/other)
+        int perm = mode & 0x1FF;                    // low 9 bits = rwx
+        int uid = Scheduler.CurrentUid();
+        int gid = 0;                                // phase 1b: no group layer
+        bool x;
+        if ((uint)uid == fileUid) x = (perm & 0x40) != 0;    // owner x (bit 6, 0100)
+        else if (gid == (int)fileGid) x = (perm & 0x08) != 0; // group x (bit 3, 0010)
+        else x = (perm & 0x01) != 0;               // other x (bit 0, 0001)
+        return x;
     }
 }

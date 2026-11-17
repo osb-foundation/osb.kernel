@@ -53,9 +53,20 @@ internal static unsafe class ConsoleInput
         if (_extended)
         {
             _extended = false;
-            // Arrow keys / other extended keys are not cooked here; the line
-            // reader handles what it needs. Swallow the rest.
-            return;
+            // S1: extended (0xE0) keys are synthesized to the SAME ANSI
+            // sequences a serial terminal delivers, so both input sources are
+            // identical for the line editor (no shell behavior for them yet).
+            switch (sc)
+            {
+                case 0x48: PushSerial(0x1B); PushSerial((byte)'['); PushSerial((byte)'A'); return; // Up
+                case 0x50: PushSerial(0x1B); PushSerial((byte)'['); PushSerial((byte)'B'); return; // Down
+                case 0x4D: PushSerial(0x1B); PushSerial((byte)'['); PushSerial((byte)'C'); return; // Right
+                case 0x4B: PushSerial(0x1B); PushSerial((byte)'['); PushSerial((byte)'D'); return; // Left
+                case 0x47: PushSerial(0x1B); PushSerial((byte)'['); PushSerial((byte)'H'); return; // Home
+                case 0x4F: PushSerial(0x1B); PushSerial((byte)'['); PushSerial((byte)'F'); return; // End
+                case 0x53: PushSerial(0x1B); PushSerial((byte)'['); PushSerial((byte)'3'); PushSerial((byte)'~'); return; // Delete
+                default: return;   // other extended keys: not cooked yet
+            }
         }
 
         if (sc == 0x2E && _ctrl) { RequestCtrlC(); return; }       // Ctrl+C (one-shot)
@@ -78,16 +89,34 @@ internal static unsafe class ConsoleInput
         if (_ctrlC < 0x7FFFFFFF) _ctrlC++;
     }
 
+    // S2: drop any buffered cooked bytes and pending Ctrl+C. Called when a new
+    // foreground program is spawned so stale input (or a -2 from a previous
+    // line) does not leak into the next program.
+    public static void Flush()
+    {
+        _ring.head = 0;
+        _ring.tail = 0;
+        _ctrlC = 0;
+        _shift = false;
+        _ctrl = false;
+        _extended = false;
+    }
+
     // GETCHAR result: next cooked byte (0..255), -1 when empty, -2 for a
-    // pending Ctrl+C (consumed once). Non-blocking.
+    // pending Ctrl+C (consumed once). Non-blocking. Buffered bytes are drained
+    // before the Ctrl+C so a line typed before Ctrl+C is consumed (and then
+    // discarded by the aborting reader), not leaked into the next line.
     public static int Pop()
     {
+        if (_ring.head != _ring.tail)
+        {
+            byte c = _ring.data[_ring.head];
+            int next = _ring.head + 1;
+            if (next >= 256) next = 0;
+            _ring.head = next;
+            return c;
+        }
         if (_ctrlC > 0) { _ctrlC--; return -2; }
-        if (_ring.head == _ring.tail) return -1;
-        byte c = _ring.data[_ring.head];
-        int next = _ring.head + 1;
-        if (next >= 256) next = 0;
-        _ring.head = next;
-        return c;
+        return -1;
     }
 }

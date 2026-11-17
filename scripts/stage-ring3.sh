@@ -50,9 +50,16 @@ stage_ring3() {
     # Ring-3 ABI test programs (run from the shell; see osb.shell/tests/progs).
     # Gated behind WITH_TESTS=1 so the default image ships only SHELL.EXE.
     if [[ "${WITH_TESTS:-0}" == "1" ]]; then
-        for prog in TSpawn TExit TArgs TPrint TWait TPtr; do
+        for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr; do
             compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
         done
+        # 26-spawnerr EACCES proof: a valid OSBEXE with mode 0100644 (no x bit)
+        # at /OSB/BIN/TNX.EXE. If SpawnPath were to create a task for it, TNX
+        # (a copy of TPrint) would print; the EACCES check must refuse it first.
+        dbg debugfs -w -R "dump /OSB/BIN/TPrint.EXE $OBJ/TNX.dump" "$OUT_IMG"
+        dbg debugfs -w -R "write $OBJ/TNX.dump /OSB/BIN/TNX.EXE" "$OUT_IMG"
+        dbg debugfs -w -R "sif /OSB/BIN/TNX.EXE mode 0100644" "$OUT_IMG"
+        echo "  staged /OSB/BIN/TNX.EXE (mode 0100644, non-exec)"
     fi
 
     run e2fsck -fy "$OUT_IMG"

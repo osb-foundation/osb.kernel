@@ -439,6 +439,25 @@ internal static unsafe partial class Syscalls
             return;
         }
 
+        if (func == 0x26) // rmdir(path in RDI, len in RSI) -> 0 ok, -4 fail
+        {
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)len)) { frame[14] = unchecked((ulong)-1); return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
+            if (Osb.Kernel.Shell.Commands.FileCommands.RemoveDir(cpath, (int)len))
+            {
+                Vga.WriteLine("OK");
+                frame[14] = 0;
+            }
+            else
+            {
+                frame[14] = unchecked((ulong)-4);
+            }
+            return;
+        }
+
         if (func == 0x63) // getenv(name in RDI, len in RSI, buf in RDX, cap in RCX)
         {
             // Per-task store (Slice 3, C1). nameLen 0 lists every variable as

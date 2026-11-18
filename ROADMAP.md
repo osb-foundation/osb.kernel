@@ -159,3 +159,24 @@ dependem de FS com dono (L4) que depende de processos isolados (L2).
 - **Higher-half:** fica para depois, se/quando o kernel passar dos primeiros
   2 MiB ou se quisermos usar PCID/`KPTI`. Hoje não é necessário.
 - **Sem GC no kernel:** evitar alocação; usar buffers fixos em `.bss` (como já é feito).
+
+---
+
+## 7. Usuário shell (migração userspace) — status de Fase 1a / 1b
+
+**Fase 1a — concluída e verificada (build/tooling):**
+- `osbkt` API pública `Syscall` + `osbkt/docs/ABI.md` v0; o shell faz zero-alocação e checa `GETABI` no arranque.
+- `crt0.S`, o stub INT 21h, `user.ld` e `mkosbx.py` vivem em `osbkt`; `osb.kernel/build.sh` os consome (sem cópias privadas no kernel).
+- Modelo de dependência do osbkt: fontes vinculadas (linked sources), não `ProjectReference`. Uma `ProjectReference` ao osbkt é incompatível com o arranque freestanding NoStdLib/MiniCoreLib (`csc` não importa tipos predefinidos como `System.Object` de uma biblioteca NoStdLib; e o osbkt precisa do `MiniCoreLib` para compilar `Syscall.cs`). Documentado em `osb.shell/AGENTS.md` §3 e `osb.shell/README.md`.
+- Harness de smoke QEMU serial + captura de transcrição dourada `A11`.
+
+**Fase 1b — concluída e verificada (endurecimento do kernel + base do userspace):**
+- B1: validação de ponteiros com estouro seguro (`IsUserRange`/`UserPtr`) em todos os syscalls que recebem ponteiros; `-1` (EFAULT) em intervalo ruim, nunca uma falha de página do Ring 0.
+- B2: `GETCHAR` (6Eh) entrada cozida mesclando serial + PS/2; retorna `0..255` / `-1` vazio / `-2` Ctrl+C (byte `0x03` nunca entregado); setas como `ESC [ A/B`; `KEY` (52h) cru preservado para XWIN.
+- B3: `SPAWNPATH` (6Ah) via bloco `SpawnReq` (40 bytes); validação de bloco/caminho/args/handle, checagem de execução antes de criar a tarefa, args de 128 bytes, PID do filho ou `-1/-3/-4/-5/-6`.
+- B4: wrappers públicos osbkt `GetChar()` e `SpawnPath(...)`; todos os números de syscall, layout de registos e detalhes da estrutura do pedido ficam no osbkt; zero alocações gerenciadas.
+- B5: syscalls existentes `01h/09h/10h/20h-23h/30h/4Ch/80h-82h/40h-59h` inalterados; teclado cru do XWIN intacto; `GETABI` inalterado.
+
+Validação QEMU (serial + monitor `sendkey` para PS/2): login, WHOAMI, ECHO, backspace, recall por seta para cima, dispatch minúsculo, Ctrl+C consumido, `TPtr` (n=35 validações de ponteiro), `TExit`/`TWait` (código 7), `TArgs`, `TPrint`, GETABI (shell arranca, ABI 5 confere), SPAWNPATH, EFAULT, entrada PS/2 (setas + Ctrl+C via monitor). Tudo PASS.
+
+Fases/slices restantes: 1c e slices 2–3 já estão na árvore (trabalho pré-existente). Slices 4–11 (escrita no FS, pipes, jobs, usuários, rede, cor, etc.) e os itens fora de escopo (§6) não foram iniciados nesta tarefa.

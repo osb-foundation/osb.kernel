@@ -19,6 +19,8 @@ using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
 using Osb.Kernel.Storage;
 
+using Osb.Kernel.Processes;
+
 namespace Osb.Kernel.Shell;
 
 internal static unsafe class Users
@@ -112,7 +114,7 @@ internal static unsafe class Users
     // ---- session ----
 
     // uid of the current user (-1 when nobody is logged in).
-    public static int Uid => _current < 0 ? -1 : _users.uids[_current];
+    public static int Uid => Scheduler.CurrentUid();
 
     public static bool IsRoot => Uid == 0;
 
@@ -140,17 +142,19 @@ internal static unsafe class Users
 
     // ---- permission checks (unix-ish: root bypasses, then owner, then other) ----
 
-    public static bool CanRead(uint owner, ushort mode)
+    public static bool CanRead(uint owner, ushort mode) => CanReadFor(Uid, owner, mode);
+    public static bool CanReadFor(int uid, uint owner, ushort mode)
     {
-        if (Uid == 0) return true;                        // root
-        if ((uint)Uid == owner) return (mode & 0x100) != 0;   // owner r
+        if (uid == 0) return true;                        // root
+        if ((uint)uid == owner) return (mode & 0x100) != 0;   // owner r
         return (mode & 0x004) != 0;                       // other r
     }
 
-    public static bool CanWrite(uint owner, ushort mode)
+    public static bool CanWrite(uint owner, ushort mode) => CanWriteFor(Uid, owner, mode);
+    public static bool CanWriteFor(int uid, uint owner, ushort mode)
     {
-        if (Uid == 0) return true;                        // root
-        if ((uint)Uid == owner) return (mode & 0x080) != 0;   // owner w
+        if (uid == 0) return true;                        // root
+        if ((uint)uid == owner) return (mode & 0x080) != 0;   // owner w
         return (mode & 0x002) != 0;                       // other w
     }
 

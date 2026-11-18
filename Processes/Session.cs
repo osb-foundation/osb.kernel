@@ -132,9 +132,13 @@ internal static unsafe partial class Scheduler
     }
 
     // 68h END_SUDO() -> 0. Restores the calling task's effective uid to the
-    // session user's real uid.
+    // session user's real uid. (Restored after commit 1378692 deleted it,
+    // which left the elevation permanent and broke 30-sudo-scope.)
     public static int EndSudo()
     {
+        int uid = _tasks.realUid[_current];
+        if (uid < 0) return -3;                       // not logged in
+        _tasks.uid[_current] = uid;                   // restore
         return 0;
     }
 

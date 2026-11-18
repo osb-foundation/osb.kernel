@@ -5,6 +5,7 @@ using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
 using Osb.Kernel.Shell;
 using Osb.Kernel.Storage;
+using Osb.Kernel.Processes;
 
 namespace Osb.Kernel.Shell.Commands;
 

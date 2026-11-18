@@ -185,10 +185,10 @@ internal static unsafe class FileCommands
                         else
                         {
                             PrintPerms(cmode);
-                            ShellText.WriteDecPad((ulong)Ext4.InodeGetLinks(cin), 4);
+                            WriteDecPad((ulong)Ext4.InodeGetLinks(cin), 4);
                             PrintOwner(Ext4.InodeGetUid(cin), 5);
                             PrintOwner(Ext4.InodeGetGid(cin), 5);
-                            ShellText.WriteDecPad((ulong)Ext4.InodeGetSize(cin), 8);
+                            WriteDecPad((ulong)Ext4.InodeGetSize(cin), 8);
                             Vga.PutChar(' ');
                             PrintUnixDate(Ext4.InodeGetMtime(cin));
                             Vga.PutChar(' ');
@@ -245,7 +245,7 @@ internal static unsafe class FileCommands
             for (int k = len; k < width; k++) Vga.PutChar(' ');
             return;
         }
-        ShellText.WriteDecPad(uid, width);
+        WriteDecPad(uid, width);
     }
 
     // PrintDate for ext4 mtimes (always UTC: no timezone database here).
@@ -956,4 +956,13 @@ internal static unsafe class FileCommands
         }
     }
 
+    // Right-aligned number in a fixed-width column (moved from ShellText).
+    private static void WriteDecPad(ulong v, int width)
+    {
+        int digits = 1;
+        ulong t = v;
+        while (t >= 10) { t /= 10; digits++; }
+        for (int i = digits; i < width; i++) Vga.PutChar(' ');
+        Vga.WriteDec(v);
+    }
 }

@@ -5,6 +5,7 @@
 
 using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
+using Osb.Kernel.Processes;
 using Osb.Kernel.Storage;
 
 namespace Osb.Kernel.Shell.Commands;
@@ -32,10 +33,10 @@ internal static unsafe class TrashStore
         fixed (char* nm = "HOME")
         {
             int vo; int vl;
-            if (Osb.Kernel.Shell.Environment.TryGet(nm, 4, out vo, out vl) && vl > 0)
+            if (Osb.Kernel.Shell.Environment.TryGet(Scheduler.Current, nm, 4, out vo, out vl) && vl > 0)
             {
                 dlen = vl < 256 ? vl : 255;
-                for (int k = 0; k < dlen; k++) dst[k] = Osb.Kernel.Shell.Environment.ValueAt(vo + k);
+                for (int k = 0; k < dlen; k++) dst[k] = Osb.Kernel.Shell.Environment.ValueAt(Scheduler.Current, vo + k);
                 return true;
             }
         }

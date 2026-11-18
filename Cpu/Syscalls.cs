@@ -96,9 +96,8 @@ internal static unsafe partial class Syscalls
             int stdoutH = (int)Rd32(req, 36);
 
             // Content checks first (EINVAL). The block length fields must be in
-            // range and the handles must be "inherit" (-1) for now.
-            if (pathLen == 0 || pathLen > 260 || argsLen > 128 ||
-                stdinH != -1 || stdoutH != -1)
+            // range. Handles may be -1 (inherit console) or a valid open handle.
+            if (pathLen == 0 || pathLen > 260 || argsLen > 128)
             {
                 frame[14] = unchecked((ulong)-5); // EINVAL
                 return;
@@ -133,12 +132,17 @@ internal static unsafe partial class Syscalls
             if (r == SpawnResult.NoSlot) { frame[14] = unchecked((ulong)-6); return; }     // ENOMEM
 
             int slot;
-            if (argsLen > 0 && Scheduler.TryFindPid(pid, out slot))
+            if (Scheduler.TryFindPid(pid, out slot))
             {
-                // B1: convert the byte args to char* for SetArgs.
-                char* cargs = stackalloc char[128];
-                for (int i = 0; i < (int)argsLen; i++) cargs[i] = (char)((byte*)argsPtr)[i];
-                Scheduler.SetArgs(slot, cargs, (int)argsLen);
+                // Copy parent's file handles to child, set stdin/stdout handles.
+                Scheduler.PropagateHandles(slot, stdinH, stdoutH);
+                if (argsLen > 0)
+                {
+                    // B1: convert the byte args to char* for SetArgs.
+                    char* cargs = stackalloc char[128];
+                    for (int i = 0; i < (int)argsLen; i++) cargs[i] = (char)((byte*)argsPtr)[i];
+                    Scheduler.SetArgs(slot, cargs, (int)argsLen);
+                }
             }
             frame[14] = (ulong)pid;
             return;
@@ -164,12 +168,20 @@ internal static unsafe partial class Syscalls
             return;
         }
 
-        if (func == 0x01) // write(buf in RDI, len in RSI): bytes to the console
+        if (func == 0x01) // write(buf in RDI, len in RSI): bytes to the console or stdout handle
         {
             ulong n = rsi > 4096 ? 4096 : rsi;
             if (!UserPtr(rdi, (int)n))
             {
                 frame[14] = unchecked((ulong)-1); // EFAULT
+                return;
+            }
+            int stdoutH = Scheduler.GetStdout();
+            if (stdoutH != -1)
+            {
+                int written = Scheduler.FileWrite(stdoutH, (byte*)rdi, (int)n);
+                if (written < 0) { frame[14] = unchecked((ulong)-5); return; }
+                frame[14] = (ulong)written;
                 return;
             }
             byte* p = (byte*)rdi;
@@ -832,10 +844,17 @@ internal static unsafe partial class Syscalls
                     if (!Users.ChangePassword(idx, cpass2, (int)plen2)) { frame[14] = unchecked((ulong)-5); return; }
                     frame[14] = 0;
                     return;
-                case 3: // DEL (root only, not root user)
+                case 3: // DEL (root only, not root user). RDX bit0 = /HOME
                     if (!isRoot) { frame[14] = unchecked((ulong)-3); return; }
                     if (idx < 0) { frame[14] = unchecked((ulong)-4); return; }
                     if (Users.UidAt(idx) == 0) { frame[14] = unchecked((ulong)-5); return; } // cannot delete root
+                    bool delHome = (rdx & 1) != 0;
+                    if (delHome)
+                    {
+                        char* hm = stackalloc char[64];
+                        int hl = Users.HomeAt(idx, hm);
+                        if (hl > 0 && !DeleteTree(hm, hl)) { frame[14] = unchecked((ulong)-5); return; }
+                    }
                     if (!Users.Del(idx)) { frame[14] = unchecked((ulong)-5); return; }
                     frame[14] = 0;
                     return;
@@ -856,8 +875,97 @@ internal static unsafe partial class Syscalls
             }
         }
 
+        // 0x76 CREATEFILE(path RDI, len RSI) -> handle or error
+        if (func == 0x76)
+        {
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)len)) { frame[14] = unchecked((ulong)-1); return; }
+            if (!Ext4.Mount()) { frame[14] = unchecked((ulong)-4); return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
+            uint ino;
+            if (!Ext4.Resolve(cpath, (int)len, out ino))
+            {
+                int slash = (int)len - 1;
+                while (slash >= 0 && cpath[slash] != '\\' && cpath[slash] != '/') slash--;
+                if (slash < 0) { frame[14] = unchecked((ulong)-4); return; }
+                char* dirPath = stackalloc char[260];
+                for (int i = 0; i < slash; i++) dirPath[i] = cpath[i];
+                uint parent;
+                if (!Ext4.Resolve(dirPath, slash, out parent)) { frame[14] = unchecked((ulong)-4); return; }
+                int baseLen = (int)len - slash - 1;
+                char* baseName = cpath + slash + 1;
+                uint existing; byte etype;
+                if (Ext4.DirEntryExists(parent, baseName, baseLen, out existing, out etype))
+                    ino = existing;
+                else
+                {
+                    if (!Ext4.AllocInode(out ino, 0x8180)) { frame[14] = unchecked((ulong)-6); return; }
+                    if (!Ext4.DirAddEntry(parent, baseName, baseLen, ino, 1)) { Ext4.FreeInode(ino); frame[14] = unchecked((ulong)-5); return; }
+                }
+            }
+            byte* inode = stackalloc byte[256];
+            if (!Ext4.ReadInode(ino, inode)) { frame[14] = unchecked((ulong)-4); return; }
+            uint sz = Ext4.InodeGetSize(inode);
+            uint nb = (sz + (uint)Ext4.BlockSize - 1) / (uint)Ext4.BlockSize;
+            if (nb == 0 && sz > 0) nb = 1;
+            for (uint lb = 0; lb < nb; lb++)
+            {
+                uint pb = Ext4.InodeGetBlock(inode, lb);
+                if (pb != 0) Ext4.FreeBlock(pb);
+            }
+            inode[Layout.InoSizeLo] = 0; inode[Layout.InoSizeLo + 1] = 0;
+            inode[Layout.InoSizeLo + 2] = 0; inode[Layout.InoSizeLo + 3] = 0;
+            for (int b = 0; b < 15; b++)
+            {
+                int boff = Layout.InoBlock + b * 4;
+                inode[boff] = 0; inode[boff + 1] = 0; inode[boff + 2] = 0; inode[boff + 3] = 0;
+            }
+            Ext4.WriteInode(ino, inode);
+            int slot = Scheduler.Current;
+            int h = Scheduler.FileCreate(slot, ino);
+            if (h < 0) { frame[14] = unchecked((ulong)-6); return; }
+            frame[14] = (ulong)h;
+            return;
+        }
+
+        // 0x77 WRITEFILE(handle RDI, data RSI, dataLen RDX) -> bytes written or error
+        if (func == 0x77)
+        {
+            int handle = (int)rdi;
+            byte* data = (byte*)rsi;
+            int count = (int)rdx;
+            if (count < 0 || count > 65536) { frame[14] = unchecked((ulong)-5); return; }
+            if (count > 0 && !UserPtr((ulong)data, count)) { frame[14] = unchecked((ulong)-1); return; }
+            int written = Scheduler.FileWrite(handle, data, count);
+            if (written < 0) { frame[14] = unchecked((ulong)-5); return; }
+            frame[14] = (ulong)written;
+            return;
+        }
+
+        // 0x78 SETSTDOUT(handle RDI) -> sets current task's stdout handle (-1 = VGA)
+        if (func == 0x78)
+        {
+            int handle = (int)rdi;
+            if (handle < -1 || handle >= Scheduler.Count * 8) { frame[14] = unchecked((ulong)-5); return; }
+            Scheduler.SetStdout(handle);
+            frame[14] = 0;
+            return;
+        }
+
+        // 0x79 SETSTDIN(handle RDI) -> sets current task's stdin handle (-1 = console)
+        if (func == 0x79)
+        {
+            int handle = (int)rdi;
+            if (handle < -1 || handle >= Scheduler.Count * 8) { frame[14] = unchecked((ulong)-5); return; }
+            Scheduler.SetStdin(handle);
+            frame[14] = 0;
+            return;
+        }
+
         frame[14] = unchecked((ulong)-2); // ENOSYS
-    }
+        }
 
     private static void Wr32(byte* p, int o, uint v)
     {
@@ -913,5 +1021,79 @@ internal static unsafe partial class Syscalls
         if ((uint)uid == fileUid) return (perm & 0x40) != 0;    // owner x (0100)
         if ((uint)gid == fileGid) return (perm & 0x08) != 0;    // group x (0010)
         return (perm & 0x01) != 0;               // other x (0001)
+    }
+
+    // Recursively delete a directory tree at `path` (len bytes).
+    // Returns true on success, false on failure.
+    private static bool DeleteTree(char* path, int len)
+    {
+        if (!Ext4.Mount()) return false;
+        uint ino;
+        if (!Ext4.Resolve(path, len, out ino)) return false;
+        byte* inode = stackalloc byte[256];
+        if (!Ext4.ReadInode(ino, inode)) return false;
+        ushort mode = Ext4.InodeGetMode(inode);
+
+        if (Ext4.IsDir(mode))
+        {
+            uint size = Ext4.InodeGetSize(inode);
+            ulong blocks = ((ulong)size + (ulong)Ext4.BlockSize - 1) / (ulong)Ext4.BlockSize;
+            if (blocks == 0) blocks = 1;
+            byte* blk = stackalloc byte[Ext4.BlockSize];
+            for (ulong b = 0; b < blocks; b++)
+            {
+                uint bnum = Ext4.InodeGetBlock(inode, b);
+                if (bnum == 0) continue;
+                Ext4.ReadBlock(bnum, blk);
+                int off = 0;
+                while (off + 8 <= Ext4.BlockSize)
+                {
+                    byte* de = blk + off;
+                    uint iino = Ext4.DirEntryInode(de);
+                    ushort rlen = Ext4.DirEntryRecLen(de);
+                    if (rlen == 0) break;
+                    byte nlen = Ext4.DirEntryNameLen(de);
+                    if (iino != 0 && nlen > 0)
+                    {
+                        bool isDot = (nlen == 1 && de[Layout.DirName] == (byte)'.');
+                        bool isDotDot = (nlen == 2 && de[Layout.DirName] == (byte)'.' &&
+                                                       de[Layout.DirName + 1] == (byte)'.');
+                        if (!isDot && !isDotDot)
+                        {
+                            var cpath = stackalloc char[260];
+                            int clen = 0;
+                            for (int k = 0; k < len && clen < 259; k++) cpath[clen++] = path[k];
+                            if (clen > 0 && cpath[clen - 1] != '\\' && cpath[clen - 1] != '/' && clen < 259)
+                                cpath[clen++] = '\\';
+                            for (int k = 0; k < nlen && clen < 259; k++) cpath[clen++] = (char)de[Layout.DirName + k];
+                            if (!DeleteTree(cpath, clen)) return false;
+                        }
+                    }
+                    off += rlen;
+                    if (off > Ext4.BlockSize - 8) break;
+                }
+            }
+        }
+
+        char* baseName = stackalloc char[256];
+        int baseLen = 0;
+        uint parentIno;
+        if (!Osb.Kernel.Shell.Commands.FileCommands.ResolveParent(path, len, out parentIno, baseName, ref baseLen))
+            return false;
+        if (baseLen <= 0) return false;
+
+        byte* delInode = stackalloc byte[256];
+        if (!Ext4.ReadInode(ino, delInode)) return false;
+        uint sz = Ext4.InodeGetSize(delInode);
+        uint nb = (sz + (uint)Ext4.BlockSize - 1) / (uint)Ext4.BlockSize;
+        if (nb == 0 && sz > 0) nb = 1;
+        for (uint lb = 0; lb < nb; lb++)
+        {
+            uint pb = Ext4.InodeGetBlock(delInode, lb);
+            if (pb != 0) Ext4.FreeBlock(pb);
+        }
+        Ext4.FreeInode(ino);
+        Ext4.DirRemoveEntry(parentIno, baseName, baseLen);
+        return true;
     }
 }

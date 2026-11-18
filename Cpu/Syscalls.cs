@@ -5,6 +5,7 @@
 using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
 using Osb.Kernel.Processes;
+using Osb.Kernel.Shell;
 using Osb.Kernel.Storage;
 
 namespace Osb.Kernel.Cpu;
@@ -13,8 +14,9 @@ internal static unsafe partial class Syscalls
 {
     // ABI version reported by GETABI (AH=82h). Bump when this table or its
     // conventions change incompatibly; osbkt checks it at startup
-    // (osbkt/docs/ABI.md). v4 (phase 1c): session identity (65h-69h).
-    public const int AbiVersion = 4;
+    // (osbkt/docs/ABI.md). v5 (phase 3, slice 3): environment (63h/64h).
+    // v4 (phase 1c): session identity (65h-69h).
+    public const int AbiVersion = 5;
 
     public static void Handle(ulong* frame)
     {
@@ -317,6 +319,83 @@ internal static unsafe partial class Syscalls
             }
             int n = Scheduler.GetArgs(Scheduler.Current, (byte*)rdi, (int)cap);
             frame[14] = (ulong)n;
+            return;
+        }
+
+        if (func == 0x63) // getenv(name in RDI, len in RSI, buf in RDX, cap in RCX)
+        {
+            // Per-task store (Slice 3, C1). nameLen 0 lists every variable as
+            // "NAME=VALUE\n" in insertion order (cap up to 1024, truncated).
+            // Otherwise: copy the value (case-insensitive name) NUL-terminated
+            // and return the FULL value length (a short buffer truncates the
+            // copy, not the reported length). Errors: -1 EFAULT, -4 ENOENT
+            // (unset), -5 EINVAL (name > 64).
+            int slot = Scheduler.Current;
+            ulong nlen = rsi;
+            if (nlen > 64) { frame[14] = unchecked((ulong)-5); return; }
+            ulong cap = rcx > 1024 ? 1024 : rcx;
+            if (cap < 1 || !UserPtr(rdx, (int)cap))
+            {
+                frame[14] = unchecked((ulong)-1); // EFAULT
+                return;
+            }
+            byte* o = (byte*)rdx;
+            if (nlen == 0)
+            {
+                frame[14] = (ulong)Environment.CopyAll(slot, o, (int)cap);
+                return;
+            }
+            if (!UserPtr(rdi, (int)nlen))
+            {
+                frame[14] = unchecked((ulong)-1);
+                return;
+            }
+            char* nm = stackalloc char[64];
+            for (int i = 0; i < (int)nlen; i++) nm[i] = (char)((byte*)rdi)[i];
+            int vo;
+            int vl;
+            if (!Environment.TryGet(slot, nm, (int)nlen, out vo, out vl))
+            {
+                frame[14] = unchecked((ulong)-4); // ENOENT
+                return;
+            }
+            int lim = vl < (int)cap - 1 ? vl : (int)cap - 1;
+            for (int k = 0; k < lim; k++) o[k] = (byte)Environment.ValueAt(slot, vo + k);
+            o[lim] = 0;
+            frame[14] = (ulong)vl;
+            return;
+        }
+
+        if (func == 0x64) // setenv(name in RDI, len in RSI, val in RDX, valLen in RCX)
+        {
+            // Per-task store (Slice 3, C1). Name 1..64, value 0..256. Returns 0
+            // on success, -1 EFAULT, -3 EACCES (kernel-locked USER/HOME), -5
+            // EINVAL (bad name/oversize), -6 ENOMEM (store full). A NULL value
+            // pointer with length 0 deletes the variable (-4 if unset).
+            int slot = Scheduler.Current;
+            ulong nlen = rsi;
+            ulong vlen = rcx;
+            if (nlen == 0 || nlen > 64 || vlen > 256) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)nlen))
+            {
+                frame[14] = unchecked((ulong)-1);
+                return;
+            }
+            char* nm = stackalloc char[64];
+            for (int i = 0; i < (int)nlen; i++) nm[i] = (char)((byte*)rdi)[i];
+            if (rdx == 0 && vlen == 0)
+            {
+                frame[14] = unchecked((ulong)Environment.DeleteChars(slot, nm, (int)nlen));
+                return;
+            }
+            if (vlen > 0 && !UserPtr(rdx, (int)vlen))
+            {
+                frame[14] = unchecked((ulong)-1);
+                return;
+            }
+            char* val = stackalloc char[256];
+            for (int i = 0; i < (int)vlen; i++) val[i] = (char)((byte*)rdx)[i];
+            frame[14] = unchecked((ulong)Environment.SetChars(slot, nm, (int)nlen, val, (int)vlen));
             return;
         }
 

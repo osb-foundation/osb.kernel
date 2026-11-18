@@ -71,18 +71,10 @@ internal static unsafe class Shell
     {
         Users.SetSession(idx);
 
-        char* userVar = stackalloc char[8];
-        fixed (char* p = "USER") { for (int k = 0; k < 4; k++) userVar[k] = p[k]; }
-
-        char* nm = stackalloc char[Users.NameCap];
-        int nl = Users.NameAt(idx, nm);
-        Environment.SetChars(userVar, 4, nm, nl);          // $USER
+        Environment.SetSessionUser(idx);   // $USER/$HOME, read-only
 
         char* home = stackalloc char[64];
         int hl = Users.HomeAt(idx, home);
-        char* homeVar = stackalloc char[8];
-        fixed (char* p = "HOME") { for (int k = 0; k < 4; k++) homeVar[k] = p[k]; }
-        Environment.ForceSetChars(homeVar, 4, home, hl);   // $HOME (read-only)
 
         if (Ext4.Mount())
         {

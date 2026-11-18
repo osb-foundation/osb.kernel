@@ -6,6 +6,7 @@ using System.Runtime;
 using Osb.Kernel.Cpu;
 using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
+using Osb.Kernel.Shell;
 using Osb.Kernel.Storage;
 
 namespace Osb.Kernel.Processes;
@@ -19,7 +20,9 @@ internal static unsafe partial class Scheduler
         pid = -1;
         int slot = AllocSlot();
         if (slot < 0) return SpawnResult.NoSlot;
-
+        // Copy the parent's environment while the slot is still FREE, so the
+        // child can never be scheduled with an empty store (C1: copy-at-spawn).
+        Environment.CopyFrom(slot, _current);
         ulong src, end;
         if (prog == Layout.ProgBad) { src = NativeMethods.osb_userbad_begin(); end = NativeMethods.osb_userbad_end(); }
         else if (prog == Layout.ProgSpawner) { src = NativeMethods.osb_spawner_begin(); end = NativeMethods.osb_spawner_end(); }
@@ -100,6 +103,8 @@ internal static unsafe partial class Scheduler
         // later CreateBuf failure leaves the slot free for reuse.)
         int slot = AllocSlot();
         if (slot < 0) return SpawnResult.NoSlot;
+        // Copy the parent's environment while the slot is still FREE (C1).
+        Environment.CopyFrom(slot, _current);
 
         if (!AddressSpace.CreateBuf(buf + 16, (int)imgSize)) return SpawnResult.OutOfMemory;
 

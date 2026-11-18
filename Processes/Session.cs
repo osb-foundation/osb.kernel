@@ -84,6 +84,7 @@ internal static unsafe partial class Scheduler
         _tasks.uid[slot] = uid;
         _tasks.gid[slot] = uid;                       // gid = uid (no group db)
         SetSessionCwd(idx);
+        Environment.SetSessionUser(slot, idx);       // $USER/$HOME (locked)
         return 0;
     }
 
@@ -113,6 +114,9 @@ internal static unsafe partial class Scheduler
         _tasks.uid[_leaderSlot] = -1;
         _tasks.realUid[_leaderSlot] = -1;
         _tasks.gid[_leaderSlot] = -1;
+        // C2: the environment must not leak across LOGOUT/LOGIN. Drop every
+        // variable (including user-set ones) and restore the session defaults.
+        Environment.ResetToDefaults(_leaderSlot);
     }
 
     // 67h SUDO() -> 0 ok, -3 if the session user is not in SUDOERS.
@@ -131,7 +135,6 @@ internal static unsafe partial class Scheduler
     // session user's real uid.
     public static int EndSudo()
     {
-        _tasks.uid[_current] = _tasks.realUid[_current];
         return 0;
     }
 

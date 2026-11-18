@@ -493,6 +493,27 @@ internal static unsafe partial class Syscalls
             return;
         }
 
+        if (func == 0x29) // copy(srcPath in RDI, srcLen in RSI, dstPath in RDX, dstLen in RCX) -> 0 ok, -4 fail
+        {
+            ulong slen = rsi;
+            ulong dlen = rcx;
+            if (slen == 0 || slen > 260 || dlen == 0 || dlen > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)slen) || !UserPtr(rdx, (int)dlen)) { frame[14] = unchecked((ulong)-1); return; }
+            char* sp = stackalloc char[260];
+            char* dp = stackalloc char[260];
+            for (int i = 0; i < (int)slen; i++) sp[i] = (char)((byte*)rdi)[i];
+            for (int i = 0; i < (int)dlen; i++) dp[i] = (char)((byte*)rdx)[i];
+            char* line = stackalloc char[520];
+            int ll = 0;
+            fixed (char* c = "COPY ") { for (int k = 0; k < 5; k++) line[ll++] = c[k]; }
+            for (int k = 0; k < (int)slen; k++) line[ll++] = sp[k];
+            line[ll++] = ' ';
+            for (int k = 0; k < (int)dlen; k++) line[ll++] = dp[k];
+            Osb.Kernel.Shell.Commands.FileCommands.Copy(line, ll);
+            frame[14] = 0;
+            return;
+        }
+
         if (func == 0x63) // getenv(name in RDI, len in RSI, buf in RDX, cap in RCX)
         {
             // Per-task store (Slice 3, C1). nameLen 0 lists every variable as

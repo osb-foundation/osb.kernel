@@ -163,6 +163,16 @@ internal static unsafe class Vga
         {
             _col = 0;
         }
+        else if (c == '\b')
+        {
+            // Backspace = cursor-left, wrap-aware (1c.1 / slice 2): at column
+            // 0 step to the last column of the previous row. The character is
+            // NOT erased here (callers print a space to erase, as the shell's
+            // line editor does); this only moves the cursor. Ring-3 redraw
+            // ("\r" + reprint + "\b"*n) depends on this primitive.
+            if (_col > 0) _col--;
+            else if (_row > 0) { _row--; _col = Layout.VgaWidth - 1; }
+        }
         else
         {
             ushort* vga = (ushort*)Layout.VgaBase;

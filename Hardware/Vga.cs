@@ -75,6 +75,7 @@ internal static unsafe class Vga
         Serial.PutChar((char)27);
         Serial.PutChar('[');
         Serial.PutChar('H');
+        UpdateCursorRegs();
     }
 
     public static void Scroll()
@@ -85,6 +86,7 @@ internal static unsafe class Vga
         for (int i = (Layout.VgaHeight - 1) * Layout.VgaWidth; i < Layout.VgaHeight * Layout.VgaWidth; i++)
             vga[i] = (ushort)(' ' | (_attr << 8));
         _row = Layout.VgaHeight - 1;
+        UpdateCursorRegs();
     }
 
     private static void WriteSerialDec(int v)
@@ -186,6 +188,23 @@ internal static unsafe class Vga
         }
         if (_row >= Layout.VgaHeight)
             Scroll();
+        UpdateCursorRegs();
+    }
+
+    // Mirror the logical cursor (_row/_col) into the CRTC so the hardware
+    // cursor (the blinking block) follows every PutChar. Without this the CRTC
+    // only moved on explicit SetCursor/WriteAt, so during line editing (which
+    // moves the cursor with "\b" and reprints) the visible cursor stayed put.
+    // Also makes the cursor position assertable from the QEMU monitor (A2).
+    private static void UpdateCursorRegs()
+    {
+        int row = _row; if (row < 0) row = 0; if (row >= Layout.VgaHeight) row = Layout.VgaHeight - 1;
+        int col = _col; if (col < 0) col = 0; if (col >= Layout.VgaWidth) col = Layout.VgaWidth - 1;
+        ushort pos = (ushort)(row * Layout.VgaWidth + col);
+        NativeMethods.outb(0x3D4, 0x0E);
+        NativeMethods.outb(0x3D5, (byte)((pos >> 8) & 0xFF));
+        NativeMethods.outb(0x3D4, 0x0F);
+        NativeMethods.outb(0x3D5, (byte)(pos & 0xFF));
     }
 
     public static void Write(string s)
@@ -253,11 +272,7 @@ internal static unsafe class Vga
         if (col > Layout.VgaWidth) col = Layout.VgaWidth;
         _row = row - 1;
         _col = col - 1;
-        ushort pos = (ushort)(_row * Layout.VgaWidth + _col);
-        NativeMethods.outb(0x3D4, 0x0E);
-        NativeMethods.outb(0x3D5, (byte)((pos >> 8) & 0xFF));
-        NativeMethods.outb(0x3D4, 0x0F);
-        NativeMethods.outb(0x3D5, (byte)(pos & 0xFF));
+        UpdateCursorRegs();
     }
 
     public static void WriteAt(int row, int col, string s)

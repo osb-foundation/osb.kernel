@@ -1,6 +1,8 @@
 // ATA PIO (IDE) driver: primary channel, LBA28, one 512-byte sector per call.
 // Ext4.cs is the only user; it turns its 4 KiB blocks into the eight sectors
-// this driver transfers.
+// this driver transfers. The data phase uses rep insw/outsw so one string
+// instruction moves a whole sector (one VM exit instead of 256 under KVM).
+// Status waits are bounded so a dead drive fails instead of hanging the kernel.
 
 using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
@@ -9,47 +11,52 @@ namespace Osb.Kernel.Storage;
 
 internal static unsafe class Ata
 {
-    private const int SectorWords = 512 / 2;   // 256 x 16-bit words
+    private const int SectorWords = 512 / 2;      // 256 x 16-bit words
+    private const int MaxTimeout = 1_000_000;     // bounded status polls
 
-    // Spin while the controller reports BSY.
-    public static void WaitBusy()
+    // Spin while the controller reports BSY; false if it never clears.
+    public static bool WaitBusy()
     {
-        while ((NativeMethods.inb(Layout.AtaPrimaryStatus) & Layout.AtaStatusBusy) != 0) { }
+        for (int i = 0; i < MaxTimeout; i++)
+            if ((NativeMethods.inb(Layout.AtaPrimaryStatus) & Layout.AtaStatusBusy) == 0) return true;
+        return false;
     }
 
     // Spin until the drive raises DRQ (data ready to transfer).
-    public static void WaitDrq()
+    public static bool WaitDrq()
     {
-        while ((NativeMethods.inb(Layout.AtaPrimaryStatus) & Layout.AtaStatusDrq) == 0) { }
+        for (int i = 0; i < MaxTimeout; i++)
+            if ((NativeMethods.inb(Layout.AtaPrimaryStatus) & Layout.AtaStatusDrq) != 0) return true;
+        return false;
     }
 
     // Point the primary master at `lba` and issue `command`, then wait for the
     // data phase to open.
-    private static void Select(ulong lba, byte command)
+    private static bool Select(ulong lba, byte command)
     {
-        WaitBusy();
-        NativeMethods.outb(Layout.AtaPrimaryDriveHead, (byte)(0xE0 | (byte)((lba >> 24) & 0x0F)));
+        if (!WaitBusy()) return false;
+        NativeMethods.outb(Layout.AtaPrimaryDriveHead, (byte)(0xE0 | ((lba >> 24) & 0x0F)));
         NativeMethods.outb(Layout.AtaPrimarySecCount, 1);
         NativeMethods.outb(Layout.AtaPrimaryLbaLow, (byte)(lba & 0xFF));
         NativeMethods.outb(Layout.AtaPrimaryLbaMid, (byte)((lba >> 8) & 0xFF));
         NativeMethods.outb(Layout.AtaPrimaryLbaHigh, (byte)((lba >> 16) & 0xFF));
         NativeMethods.outb(Layout.AtaPrimaryCommand, command);
-        WaitBusy();
-        WaitDrq();
+        return WaitBusy();
     }
 
-    public static void ReadSector(ulong lba, byte* buffer)
+    public static bool ReadSector(ulong lba, byte* buffer)
     {
-        Select(lba, Layout.AtaCmdReadSectors);
-        for (int i = 0; i < SectorWords; i++)
-            ((ushort*)buffer)[i] = NativeMethods.inw(Layout.AtaPrimaryData);
+        if (!Select(lba, Layout.AtaCmdReadSectors)) return false;
+        if (!WaitDrq()) return false;
+        NativeMethods.insw(Layout.AtaPrimaryData, (ushort*)buffer, SectorWords);
+        return true;
     }
 
-    public static void WriteSector(ulong lba, byte* buffer)
+    public static bool WriteSector(ulong lba, byte* buffer)
     {
-        Select(lba, Layout.AtaCmdWriteSectors);
-        for (int i = 0; i < SectorWords; i++)
-            NativeMethods.outw(Layout.AtaPrimaryData, ((ushort*)buffer)[i]);
-        WaitBusy();
+        if (!Select(lba, Layout.AtaCmdWriteSectors)) return false;
+        if (!WaitDrq()) return false;
+        NativeMethods.outsw(Layout.AtaPrimaryData, (ushort*)buffer, SectorWords);
+        return WaitBusy();
     }
 }

@@ -191,6 +191,29 @@ inw:
     inw  %dx, %ax
     ret
 
+/* 16-bit string input: ES:RDI <- port DX, ECX words. One string instruction moves
+ * a whole ATA PIO sector instead of 256 separate port accesses (VM exits under KVM).
+ * ECX must be loaded before %dx is reused for the port. */
+.global insw
+.type insw, @function
+insw:
+    movl %edx, %ecx
+    movw %di, %dx
+    movq %rsi, %rdi
+    cld
+    rep insw
+    ret
+
+/* 16-bit string output: port DX <- DS:RSI, ECX words. */
+.global outsw
+.type outsw, @function
+outsw:
+    movl %edx, %ecx
+    movw %di, %dx
+    cld
+    rep outsw
+    ret
+
 /* 32-bit port output (PCI configuration space is accessed through 0xCF8/0xCFC). */
 .global outl
 .type outl, @function

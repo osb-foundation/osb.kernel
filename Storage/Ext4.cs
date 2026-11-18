@@ -38,7 +38,7 @@ internal static unsafe class Ext4
     {
         if (_mounted) return true;
         byte* sbuf = stackalloc byte[BlockSize];
-        ReadBlock(0UL, sbuf);
+        if (!ReadBlock(0UL, sbuf)) return false;
         byte* sb = sbuf + 1024;
         if (SbMagic(sb) != 0xEF53) return false;
         _inodeSize = SbInodeSize(sb);
@@ -48,7 +48,7 @@ internal static unsafe class Ext4
         _groupCount = (blocks + _blocksPerGroup - 1) / _blocksPerGroup;
         if (_groupCount == 0) _groupCount = 1;
         byte* gdt = stackalloc byte[BlockSize];
-        ReadBlock(1UL, gdt);
+        if (!ReadBlock(1UL, gdt)) return false;
         _blkBitmapBlock = GdBlockBitmap(gdt, 0);
         _inoBitmapBlock = GdInodeBitmap(gdt, 0);
         _inoTableBlock = GdInodeTable(gdt, 0);
@@ -57,16 +57,20 @@ internal static unsafe class Ext4
     }
 
     // ---- block I/O (one block = eight 512-byte sectors) ----
-    public static void ReadBlock(ulong block, byte* buf)
+    public static bool ReadBlock(ulong block, byte* buf)
     {
         ulong lba = block * 8UL;
-        for (int i = 0; i < 8; i++) Ata.ReadSector(lba + (ulong)i, buf + (i * 512));
+        for (int i = 0; i < 8; i++)
+            if (!Ata.ReadSector(lba + (ulong)i, buf + i * 512)) return false;
+        return true;
     }
 
-    public static void WriteBlock(ulong block, byte* buf)
+    public static bool WriteBlock(ulong block, byte* buf)
     {
         ulong lba = block * 8UL;
-        for (int i = 0; i < 8; i++) Ata.WriteSector(lba + (ulong)i, buf + (i * 512));
+        for (int i = 0; i < 8; i++)
+            if (!Ata.WriteSector(lba + (ulong)i, buf + i * 512)) return false;
+        return true;
     }
 
     // ---- inode table (contiguous blocks; an inode spans at most 2 blocks) ----

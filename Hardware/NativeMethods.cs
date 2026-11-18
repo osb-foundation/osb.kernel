@@ -10,6 +10,8 @@ internal static unsafe partial class NativeMethods
     [DllImport("osbnative")] public static extern void outw(ushort port, ushort value);
     [DllImport("osbnative")] public static extern byte inb(ushort port);
     [DllImport("osbnative")] public static extern ushort inw(ushort port);
+    [DllImport("osbnative")] public static extern void insw(ushort port, ushort* dst, int count);
+    [DllImport("osbnative")] public static extern void outsw(ushort port, ushort* src, int count);
     [DllImport("osbnative")] public static extern void outl(ushort port, uint value);
     [DllImport("osbnative")] public static extern uint inl(ushort port);
     [DllImport("osbnative")] public static extern void lidt(byte* idtr);

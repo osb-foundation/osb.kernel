@@ -56,6 +56,7 @@ namespace Osb.Kernel
         Vga.WriteLine("Files: ATA PIO + ext4 on A:.");
         Vga.WriteLine("Shell: boot program (default A:\\OSB\\BIN\\SHELL.EXE; CONF/BOOT only in WITH_TESTS builds)");
         Vga.WriteLine("Mouse: PS/2 IRQ12 (stream mode).");
+        Vga.FlushCursor();
         Vga.WriteLine("");
 
         Environment.Init();     // session environment (PATH, PROMPT, USER, ...)

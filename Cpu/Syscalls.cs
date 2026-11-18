@@ -45,6 +45,7 @@ internal static unsafe partial class Syscalls
                 Vga.PutChar((char)p[n]);
                 n++;
             }
+            Vga.FlushCursor();
             frame[14] = 0;
             return;
         }
@@ -169,6 +170,7 @@ internal static unsafe partial class Syscalls
             }
             byte* p = (byte*)rdi;
             for (ulong i = 0; i < n; i++) Vga.PutChar((char)p[i]);
+            Vga.FlushCursor();
             frame[14] = n;
             return;
         }

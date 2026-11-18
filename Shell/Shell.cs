@@ -41,6 +41,7 @@ internal static unsafe class Shell
             if (ConsoleControl.TakeCtrlC()) { Vga.PutChar('\n'); continue; }
 
             Vga.Write("login: ");
+            Vga.FlushCursor();
             int nlen = ReadLine(name, 32, echo: true);
             if (nlen <= 0) continue;
 

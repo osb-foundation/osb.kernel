@@ -188,7 +188,6 @@ internal static unsafe class Vga
         }
         if (_row >= Layout.VgaHeight)
             Scroll();
-        UpdateCursorRegs();
     }
 
     // Mirror the logical cursor (_row/_col) into the CRTC so the hardware
@@ -263,6 +262,10 @@ internal static unsafe class Vga
         WriteDec((ulong)v);
     }
 
+    // Called once per console output syscall (01h/09h), not per PutChar: the
+    // CRTC needs 4 outb (4 VM exits under KVM), so per-character updates are
+    // the dominant cost of printing. PutChar only moves the logical cursor.
+    public static void FlushCursor() => UpdateCursorRegs();
 
     public static void SetCursor(int row, int col)
     {

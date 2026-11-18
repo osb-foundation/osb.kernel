@@ -470,6 +470,29 @@ internal static unsafe partial class Syscalls
             return;
         }
 
+        if (func == 0x28) // rename(oldPath in RDI, oldLen in RSI, newPath in RDX, newLen in RCX) -> 0 ok, -4 fail
+        {
+            ulong olen = rsi;
+            ulong nlen = rcx;
+            if (olen == 0 || olen > 260 || nlen == 0 || nlen > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)olen) || !UserPtr(rdx, (int)nlen)) { frame[14] = unchecked((ulong)-1); return; }
+            char* op = stackalloc char[260];
+            char* np = stackalloc char[260];
+            for (int i = 0; i < (int)olen; i++) op[i] = (char)((byte*)rdi)[i];
+            for (int i = 0; i < (int)nlen; i++) np[i] = (char)((byte*)rdx)[i];
+            // Ren takes a single line "REN old new"; build it
+            char* line = stackalloc char[520];
+            int ll = 0;
+            // "REN " + old + " " + new
+            fixed (char* r = "REN ") { for (int k = 0; k < 4; k++) line[ll++] = r[k]; }
+            for (int k = 0; k < (int)olen; k++) line[ll++] = op[k];
+            line[ll++] = ' ';
+            for (int k = 0; k < (int)nlen; k++) line[ll++] = np[k];
+            Osb.Kernel.Shell.Commands.FileCommands.Ren(line, ll);
+            frame[14] = 0;
+            return;
+        }
+
         if (func == 0x63) // getenv(name in RDI, len in RSI, buf in RDX, cap in RCX)
         {
             // Per-task store (Slice 3, C1). nameLen 0 lists every variable as

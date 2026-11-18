@@ -514,6 +514,18 @@ internal static unsafe partial class Syscalls
             return;
         }
 
+        if (func == 0x61) // ln(command line in RDI, len in RSI) -> 0 ok, -4 fail
+        {
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)len)) { frame[14] = unchecked((ulong)-1); return; }
+            char* cline = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cline[i] = (char)((byte*)rdi)[i];
+            Osb.Kernel.Shell.Commands.FileCommands.Ln(cline, (int)len);
+            frame[14] = 0;
+            return;
+        }
+
         if (func == 0x63) // getenv(name in RDI, len in RSI, buf in RDX, cap in RCX)
         {
             // Per-task store (Slice 3, C1). nameLen 0 lists every variable as

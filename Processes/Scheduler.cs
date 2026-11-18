@@ -64,6 +64,10 @@ internal static unsafe partial class Scheduler
         public fixed int uid[Count];              // effective uid (0 = root, -1 = none)
         public fixed int realUid[Count];          // session user's real uid (fixed on sudo)
         public fixed int gid[Count];              // group id
+        public fixed int fhInode[Count * 8];          // file handle: inode
+        public fixed int fhOff[Count * 8];            // file handle: offset
+        public fixed int fhSize[Count * 8];           // file handle: size
+        public fixed int fhUsed[Count * 8];           // file handle: in use
     }
 
     private unsafe struct StackPool { public fixed byte bytes[Count * Layout.StackSize]; }
@@ -138,6 +142,62 @@ internal static unsafe partial class Scheduler
         while (n < Layout.MaxName && t.Name[n] != 0) n++;
         t.NameLen = n;
         return t;
+    }
+
+    // File handle helpers (Slice 4): per-task, 8 handles per slot.
+    public static int FileOpen(int slot, uint ino, int size)
+    {
+        for (int h = 0; h < 8; h++)
+        {
+            int hi = slot * 8 + h;
+            if (_tasks.fhUsed[hi] == 0)
+            {
+                _tasks.fhUsed[hi] = 1;
+                _tasks.fhInode[hi] = (int)ino;
+                _tasks.fhOff[hi] = 0;
+                _tasks.fhSize[hi] = size;
+                return hi;   // global handle id
+            }
+        }
+        return -1;
+    }
+
+    public static int FileRead(int handle, byte* buf, int count)
+    {
+        if (handle < 0 || handle >= Count * 8) return -1;
+        if (_tasks.fhUsed[handle] == 0) return -1;
+        int ino = _tasks.fhInode[handle];
+        int off = _tasks.fhOff[handle];
+        int size = _tasks.fhSize[handle];
+        if (off >= size) return 0;
+        int want = count;
+        if (want > size - off) want = size - off;
+        if (want <= 0) return 0;
+        // read via Ext4: need inode + block walk
+        byte* inode = stackalloc byte[256];
+        if (!Storage.Ext4.ReadInode((uint)ino, inode)) return -1;
+        int got = 0;
+        while (got < want)
+        {
+            ulong blockIndex = (ulong)(off + got) / (ulong)Storage.Ext4.BlockSize;
+            int blockOff = (off + got) % Storage.Ext4.BlockSize;
+            uint bnum = Storage.Ext4.InodeGetBlock(inode, blockIndex);
+            if (bnum == 0) break;
+            byte* blk = stackalloc byte[Storage.Ext4.BlockSize];
+            Storage.Ext4.ReadBlock(bnum, blk);
+            int avail = Storage.Ext4.BlockSize - blockOff;
+            if (avail > want - got) avail = want - got;
+            for (int k = 0; k < avail; k++) buf[got + k] = blk[blockOff + k];
+            got += avail;
+        }
+        _tasks.fhOff[handle] = off + got;
+        return got;
+    }
+
+    public static void FileClose(int handle)
+    {
+        if (handle < 0 || handle >= Count * 8) return;
+        _tasks.fhUsed[handle] = 0;
     }
 
     public static bool IsFree(int slot) { return _tasks.state[slot] == Layout.TaskFree; }

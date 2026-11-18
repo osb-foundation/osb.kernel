@@ -322,6 +322,103 @@ internal static unsafe partial class Syscalls
             return;
         }
 
+        if (func == 0x24) // chdir(path in RDI, len in RSI)
+        {
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)len)) { frame[14] = unchecked((ulong)-1); return; }
+            if (!Ext4.Mount()) { frame[14] = unchecked((ulong)-4); return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
+            byte* canon = stackalloc byte[300];
+            int canonLen = 0;
+            uint ino;
+            if (!Ext4.ResolveCanonical(cpath, (int)len, out ino, canon, ref canonLen)) { frame[14] = unchecked((ulong)-4); return; }
+            byte* inode = stackalloc byte[256];
+            if (!Ext4.ReadInode(ino, inode)) { frame[14] = unchecked((ulong)-4); return; }
+            if (!Ext4.IsDir(Ext4.InodeGetMode(inode))) { frame[14] = unchecked((ulong)-4); return; }
+            Cwd.Set(canon, canonLen);
+            frame[14] = 0;
+            return;
+        }
+
+        if (func == 0x2A) // open(path in RDI, len in RSI) -> handle or negative
+        {
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)len)) { frame[14] = unchecked((ulong)-1); return; }
+            if (!Ext4.Mount()) { frame[14] = unchecked((ulong)-4); return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
+            uint ino;
+            if (!Ext4.Resolve(cpath, (int)len, out ino)) { frame[14] = unchecked((ulong)-4); return; }
+            byte* inode = stackalloc byte[256];
+            if (!Ext4.ReadInode(ino, inode)) { frame[14] = unchecked((ulong)-4); return; }
+            if (!Ext4.IsReg(Ext4.InodeGetMode(inode))) { frame[14] = unchecked((ulong)-4); return; }
+            // I6: read permission enforcement
+            uint owner = Ext4.InodeGetUid(inode);
+            ushort mode = Ext4.InodeGetMode(inode);
+            if (!Users.CanRead(owner, mode)) { frame[14] = unchecked((ulong)-3); return; }
+            int size = (int)Ext4.InodeGetSize(inode);
+            int slot = Scheduler.Current;
+            int h = Scheduler.FileOpen(slot, ino, size);
+            if (h < 0) { frame[14] = unchecked((ulong)-6); return; }
+            frame[14] = (ulong)h;
+            return;
+        }
+
+        if (func == 0x2B) // read(handle in RDI, buf in RSI, count in RDX) -> bytes or negative
+        {
+            int handle = (int)rdi;
+            ulong count = rdx;
+            if (count == 0) { frame[14] = 0; return; }
+            ulong cap = count > 4096 ? 4096 : count;
+            if (!UserPtr(rsi, (int)cap)) { frame[14] = unchecked((ulong)-1); return; }
+            byte* buf = stackalloc byte[4096];
+            int got = Scheduler.FileRead(handle, buf, (int)cap);
+            if (got < 0) { frame[14] = unchecked((ulong)-1); return; }
+            byte* o = (byte*)rsi;
+            for (int k = 0; k < got; k++) o[k] = buf[k];
+            frame[14] = (ulong)got;
+            return;
+        }
+
+        if (func == 0x2C) // close(handle in RDI)
+        {
+            Scheduler.FileClose((int)rdi);
+            frame[14] = 0;
+            return;
+        }
+
+        if (func == 0x60) // stat(path in RDI, len in RSI, out in RDX) -> 1/0
+        {
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = 0; return; }
+            if (!UserPtr(rdi, (int)len) || !UserPtr(rdx, 16)) { frame[14] = 0; return; }
+            if (!Ext4.Mount()) { frame[14] = 0; return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
+            uint ino;
+            if (!Ext4.Resolve(cpath, (int)len, out ino)) { frame[14] = 0; return; }
+            byte* inode = stackalloc byte[256];
+            if (!Ext4.ReadInode(ino, inode)) { frame[14] = 0; return; }
+            byte* o = (byte*)rdx;
+            ushort mode = Ext4.InodeGetMode(inode);
+            o[0] = (byte)(mode & 0xFF); o[1] = (byte)(mode >> 8);
+            uint uid = Ext4.InodeGetUid(inode);
+            o[2] = (byte)(uid & 0xFF); o[3] = (byte)((uid >> 8) & 0xFF);
+            uint gid = Ext4.InodeGetGid(inode);
+            o[4] = (byte)(gid & 0xFF); o[5] = (byte)((gid >> 8) & 0xFF);
+            uint size = Ext4.InodeGetSize(inode);
+            for (int k = 0; k < 4; k++) o[6 + k] = (byte)(size >> (k * 8));
+            uint mtime = Ext4.InodeGetMtime(inode);
+            for (int k = 0; k < 4; k++) o[10 + k] = (byte)(mtime >> (k * 8));
+            ushort links = (ushort)Ext4.InodeGetLinks(inode);
+            o[14] = (byte)(links & 0xFF); o[15] = (byte)(links >> 8);
+            frame[14] = 1;
+            return;
+        }
+
         if (func == 0x63) // getenv(name in RDI, len in RSI, buf in RDX, cap in RCX)
         {
             // Per-task store (Slice 3, C1). nameLen 0 lists every variable as

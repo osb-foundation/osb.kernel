@@ -179,7 +179,7 @@ dependem de FS com dono (L4) que depende de processos isolados (L2).
 
 Validação QEMU (serial + monitor `sendkey` para PS/2): login, WHOAMI, ECHO, backspace, recall por seta para cima, dispatch minúsculo, Ctrl+C consumido, `TPtr` (n=35 validações de ponteiro), `TExit`/`TWait` (código 7), `TArgs`, `TPrint`, GETABI (shell arranca, ABI 5 confere), SPAWNPATH, EFAULT, entrada PS/2 (setas + Ctrl+C via monitor). Tudo PASS.
 
-Fases/slices restantes: **Fase 1c está parcialmente concluída** — 65h/66h/69h verificadas, mas 67h/68h estão quebradas (o `EndSudo()` perdeu o restore do uid na commit `1378692`, Slice 3; o golden 30-sudo-scope falha). Slices 2–3 estão na árvore e passam. Slices 4–11 (escrita no FS, pipes, jobs, usuários, rede, cor, etc.) e os itens fora de escopo (§6) não foram iniciados nesta tarefa.
+Fases/slices restantes: **Fase 1c concluída** — 65h–69h todas funcionando, incluindo o contrato de elevação SUDO/END_SUDO (`Scheduler.EndSudo()` restaura o uid efetivo). Slices 2–5 concluídas e verificadas (leitura/escrita no FS: DIR/CD/PWD/TYPE/SIZE/MD/RD/DEL/REN/COPY/CP/LN/TRASH). Slices 6–11 implementadas (jobs TASK/PS/KILL/WAIT/TAB, sistema/tempo VER/ABOUT/HELP/CLS/MEM/TIME/DATE/TICKS/SLEEP/ECHO, COLOR, USER/CHOWN/CHMOD; syscalls 6Fh/70h/71h/72h, WAIT interrutível (-7 EINTR), KILL/SETFG com verificação de uid; osbkt ABI v6).
 
  Status verificado em 2026-11-18 (auditoria completa dos quatro repositórios):
 
@@ -188,7 +188,8 @@ Fases/slices restantes: **Fase 1c está parcialmente concluída** — 65h/66h/69
 | Fase 0 — arquitetura aprovada | aprovada | decisões §7; sem alteração de código |
 | Fase 1a — build/tooling | concluída | osb.core 32ce84e, osbkt df5778e, osb.shell d7ed7cd, osb.kernel 749f6e9; os quatro `dotnet build` OK; `./build.sh` + `./build.sh check` OK; smoke PASS |
 | Fase 1b — endurecimento do kernel | concluída | B1–B5 verificadas no código; golden 20/21/22/23/24/25/26/27 PASS; 24-ptr n=35 |
-| Fase 1c — fundação de identidade | **parcialmente concluída** | 65h/66h/69h verificadas (28-identity PASS, 29-logout-kills PASS). **67h SUDO + 68h END_SUDO quebradas**: `Scheduler.EndSudo()` é no-op (`Processes/Session.cs:136-139`) — o restore do uid efetivo foi deletado pela commit `1378692` (Slice 3). Consequência: **30-sudo-scope FALLA** ("TSUDO: FAIL childuid"); a mutação M06-endsudo-noop não se aplica porque a linha que ela deleta já sumiu. Elevação root nunca reverte. |
+| Fase 1c — fundação de identidade | concluída | 65h/66h/67h/68h/69h verificadas (28-identity PASS, 29-logout-kills PASS, 30-sudo-scope PASS); `Scheduler.EndSudo()` restaura o uid efetivo |
 | Slice 2 — editor de linha / histórico / completion | concluída | golden 10/11/31/32/33/34/35 PASS; testes unit host pass=52 fail=0 |
-| Slice 3 — prompt / env / expansão | concluída | golden 03/36/37 PASS; **mas** a Slice 3 também introduziu a regressão do EndSudo acima |
-| Slices 4–11 | pendentes | nenhuma alteração de código além do listado; cases golden com min-level > 3 são puladas |
+| Slice 3 — prompt / env / expansão | concluída | golden 03/36/37 PASS |
+| Slices 4–5 — comandos de FS leitura/escrita | concluída | golden 05-dir, 06-cd; MD/RD/DEL/REN/COPY/CP/LN/TRASH |
+| Slices 6–11 | implementadas | jobs, sistema/tempo, COLOR, USER/CHOWN/CHMOD; syscalls 6Fh/70h/71h/72h; ABI v6 |

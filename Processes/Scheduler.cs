@@ -212,6 +212,9 @@ internal static unsafe partial class Scheduler
     // Group id of the task currently running (used by the 6Ah exec check).
     public static int CurrentGid() { return _tasks.gid[_current]; }
 
+    // Effective uid of the task in `slot`, for permission checks by slot.
+    public static int GetUid(int slot) { return _tasks.uid[slot]; }
+
     // Find a live (ready) or zombie slot by pid; false if unknown.
     public static bool TryFindPid(int pid, out int slot)
     {
@@ -385,7 +388,15 @@ internal static unsafe partial class Scheduler
     {
         int slot;
         if (!TryFindPid(pid, out slot)) return -1;
-        while (_tasks.state[slot] == Layout.TaskReady) NativeMethods.halt();
+        while (_tasks.state[slot] == Layout.TaskReady)
+        {
+            NativeMethods.halt();
+            if (ConsoleInput.CtrlCPending)
+            {
+                ConsoleInput.ConsumeCtrlCPending();
+                return -7; // EINTR
+            }
+        }
         if (_tasks.state[slot] == Layout.TaskZombie) return Reap(slot) & 0xFF;
         return -1;   // vanished (e.g. killed)
     }

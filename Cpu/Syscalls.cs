@@ -14,9 +14,11 @@ internal static unsafe partial class Syscalls
 {
     // ABI version reported by GETABI (AH=82h). Bump when this table or its
     // conventions change incompatibly; osbkt checks it at startup
-    // (osbkt/docs/ABI.md). v5 (phase 3, slice 3): environment (63h/64h).
-    // v4 (phase 1c): session identity (65h-69h).
-    public const int AbiVersion = 5;
+    // (osbkt/docs/ABI.md). v6 (slice 6): console (6Fh CLEAR, 70h SETCOLOR,
+    // 71h GETCOLOR, 72h DATETIME); WAIT interruptible (-7 EINTR); KILL/SETFG
+    // uid-gated. v5 (phase 3, slice 3): environment (63h/64h). v4 (phase 1c):
+    // session identity (65h-69h).
+    public const int AbiVersion = 7;
 
     public static void Handle(ulong* frame)
     {
@@ -613,6 +615,245 @@ internal static unsafe partial class Syscalls
             for (int i = 0; i < (int)vlen; i++) val[i] = (char)((byte*)rdx)[i];
             frame[14] = unchecked((ulong)Environment.SetChars(slot, nm, (int)nlen, val, (int)vlen));
             return;
+        }
+
+        if (func == 0x6B) // tasklist(out in RDI, cap in RSI) -> count
+        {
+            if (rdi == 0 || rsi == 0) { frame[14] = unchecked((ulong)-1); return; }
+            if (!UserPtr(rdi, (int)rsi)) { frame[14] = unchecked((ulong)-1); return; }
+            int uid = Scheduler.CurrentUid();
+            byte* outp = (byte*)rdi;
+            int cap = (int)rsi;
+            int n = 0;
+            int off = 0;
+            for (int slot = 0; slot < 8; slot++)
+            {
+                if (Scheduler.IsFree(slot)) continue;
+                var ti = Scheduler.Get(slot);
+
+                if (off + 16 > cap) break;
+                // write pid (4), state (4), name (8 bytes)
+                outp[off] = (byte)(ti.Pid & 0xFF);
+                outp[off+1] = (byte)((ti.Pid>>8)&0xFF);
+                outp[off+2] = (byte)((ti.Pid>>16)&0xFF);
+                outp[off+3] = (byte)((ti.Pid>>24)&0xFF);
+                outp[off+4] = (byte)(ti.State & 0xFF);
+                outp[off+5]=outp[off+6]=outp[off+7]=0;
+                for (int k=0;k<8;k++) outp[off+8+k]= (k < ti.NameLen && ti.Name!=null ? ti.Name[k] : (byte)0);
+                off += 16; n++;
+            }
+            frame[14] = unchecked((ulong)n);
+            return;
+        }
+
+        if (func == 0x6C) // kill(pid in RDI) -> 0 ok / -4 not found / -3 denied
+        {
+            int pid = (int)rdi;
+            int slot;
+            if (!Scheduler.TryFindPid(pid, out slot)) { frame[14] = unchecked((ulong)-4); return; }
+            if (slot == 0) { frame[14] = unchecked((ulong)-3); return; } // console
+            int uid = Scheduler.CurrentUid();
+            int targetUid = Scheduler.GetUid(slot);
+            if (uid != 0 && uid != targetUid) { frame[14] = unchecked((ulong)-3); return; } // EACCES
+            Scheduler.Release(slot);
+            frame[14] = 0;
+            return;
+        }
+
+        if (func == 0x6D) // setfg(pid in RDI) -> 0 ok / -4 not found / -3 denied
+        {
+            int pid = (int)rdi;
+            int slot;
+            if (!Scheduler.TryFindPid(pid, out slot)) { frame[14] = unchecked((ulong)-4); return; }
+            int uid = Scheduler.CurrentUid();
+            int targetUid = Scheduler.GetUid(slot);
+            if (uid != 0 && uid != targetUid) { frame[14] = unchecked((ulong)-3); return; } // EACCES
+            Scheduler.MakeForeground(slot);
+            frame[14] = 0;
+            return;
+        }
+
+        if (func == 0x6F) // clear: console clear + serial ESC[2J H
+        {
+            Vga.Clear();
+            frame[14] = 0;
+            return;
+        }
+
+        if (func == 0x70) // setcolor: fg in AL, bg in AH
+        {
+            byte fg = (byte)(rax & 0xFF);
+            byte bg = (byte)((rax >> 8) & 0xFF);
+            if (fg == bg) { frame[14] = unchecked((ulong)-5); return; } // EINVAL: same fg/bg
+            Vga.SetColor(fg, bg);
+            frame[14] = 0;
+            return;
+        }
+
+        if (func == 0x71) // getcolor: out fg, bg (2 bytes at RDI)
+        {
+            if (!UserPtr(rdi, 2)) { frame[14] = unchecked((ulong)-1); return; } // EFAULT
+            byte attr = Vga.Attr;
+            ((byte*)rdi)[0] = (byte)(attr & 0x0F);       // fg
+            ((byte*)rdi)[1] = (byte)((attr >> 4) & 0x0F); // bg
+            frame[14] = 0;
+            return;
+        }
+
+        if (func == 0x72) // datetime: out u8[8] = Y,M,D,h,m,s,0,0 at RDI
+        {
+            if (!UserPtr(rdi, 8)) { frame[14] = unchecked((ulong)-1); return; } // EFAULT
+            byte* o = (byte*)rdi;
+            o[0] = Rtc.Year;
+            o[1] = Rtc.Month;
+            o[2] = Rtc.Day;
+            o[3] = Rtc.Hour;
+            o[4] = Rtc.Minute;
+            o[5] = Rtc.Second;
+            o[6] = 0;
+            o[7] = 0;
+            frame[14] = 0;
+            return;
+        }
+
+        // 73h CHMOD(path RDI, len RSI, mode RDX) -> 0 ok / -3 EACCES / -4 not found / -5 EINVAL / -1 EFAULT
+        // Root or the file owner may set the low 12 permission bits.
+        if (func == 0x73)
+        {
+            ushort mode = (ushort)rdx;
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)len)) { frame[14] = unchecked((ulong)-1); return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
+            if (!Ext4.Mount()) { frame[14] = unchecked((ulong)-4); return; }
+            uint ino;
+            if (!Ext4.Resolve(cpath, (int)len, out ino)) { frame[14] = unchecked((ulong)-4); return; }
+            byte* inode = stackalloc byte[256];
+            if (!Ext4.ReadInode(ino, inode)) { frame[14] = unchecked((ulong)-4); return; }
+            int uid = Scheduler.CurrentUid();
+            uint fileUid = Ext4.InodeGetUid(inode);
+            if (uid != 0 && (uint)uid != fileUid) { frame[14] = unchecked((ulong)-3); return; } // EACCES
+            if (!Users.ChmodPath(cpath, (int)len, mode)) { frame[14] = unchecked((ulong)-4); return; }
+            frame[14] = 0;
+            return;
+        }
+
+        // 74h CHOWN(path RDI, len RSI, uid RDX) -> 0 ok / -3 EACCES / -4 not found / -5 EINVAL / -1 EFAULT
+        // Root only.
+        if (func == 0x74)
+        {
+            if (Scheduler.CurrentUid() != 0) { frame[14] = unchecked((ulong)-3); return; } // EACCES
+            ulong len = rsi;
+            if (len == 0 || len > 260) { frame[14] = unchecked((ulong)-5); return; }
+            if (!UserPtr(rdi, (int)len)) { frame[14] = unchecked((ulong)-1); return; }
+            char* cpath = stackalloc char[260];
+            for (int i = 0; i < (int)len; i++) cpath[i] = (char)((byte*)rdi)[i];
+            uint newUid = (uint)rdx;
+            if (!Ext4.Mount()) { frame[14] = unchecked((ulong)-4); return; }
+            uint ino;
+            if (!Ext4.Resolve(cpath, (int)len, out ino)) { frame[14] = unchecked((ulong)-4); return; }
+            if (!Users.Chown(cpath, (int)len, newUid)) { frame[14] = unchecked((ulong)-4); return; }
+            frame[14] = 0;
+            return;
+        }
+
+        // 75h USEROP(sub in AL) — account management.
+        //   AL=0 LIST:  RDI=buf, RSI=cap -> writes "name uid home sudo\n" per user, returns byte count
+        //   AL=1 ADD:   RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (root only)
+        //   AL=2 CHANGEPASS: RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (root or own)
+        //   AL=3 DEL:   RDI=name, RSI=nameLen (root only, not root user)
+        //   AL=4 SUDO:  RDI=name, RSI=nameLen (root only)
+        //   AL=5 UNSUDO: RDI=name, RSI=nameLen (root only)
+        // Returns 0 ok / -3 EACCES / -4 not found / -5 EINVAL / -6 ENOMEM / -1 EFAULT.
+        if (func == 0x75)
+        {
+            int sub = (int)(rax & 0xFF);
+            if (sub == 0) // LIST
+            {
+                ulong cap = rsi;
+                if (cap == 0 || !UserPtr(rdi, (int)cap)) { frame[14] = unchecked((ulong)-1); return; }
+                byte* o = (byte*)rdi;
+                int written = 0;
+                char* nm = stackalloc char[Users.NameCap];
+                char* hm = stackalloc char[64];
+                int sessUid = Scheduler.CurrentUid();
+                for (int i = 0; i < Users.Count; i++)
+                {
+                    int nl = Users.NameAt(i, nm);
+                    int hl = Users.HomeAt(i, hm);
+                    for (int k = 0; k < nl && written < (int)cap - 1; k++) o[written++] = (byte)nm[k];
+                    if (written < (int)cap - 1) o[written++] = (byte)' ';
+                    var ubuf = stackalloc char[8];
+                    int un = 0;
+                    {
+                        uint uv = (uint)Users.UidAt(i);
+                        if (uv == 0) ubuf[un++] = '0';
+                        else { byte* tmp = stackalloc byte[8]; int tn = 0; while (uv != 0) { tmp[tn++] = (byte)('0' + (int)(uv % 10)); uv /= 10; } while (tn > 0) ubuf[un++] = (char)tmp[--tn]; }
+                    }
+                    for (int k = 0; k < un && written < (int)cap - 1; k++) o[written++] = (byte)ubuf[k];
+                    if (written < (int)cap - 1) o[written++] = (byte)' ';
+                    for (int k = 0; k < hl && written < (int)cap - 1; k++) o[written++] = (byte)hm[k];
+                    if (written < (int)cap - 1) o[written++] = (byte)' ';
+                    o[written++] = Users.IsSudoerAt(i) ? (byte)'1' : (byte)'0';
+                    if (written < (int)cap - 1) o[written++] = (byte)' ';
+                    if (Users.UidAt(i) == sessUid) o[written++] = (byte)'*';
+                    if (written < (int)cap - 1) o[written++] = (byte)'\n';
+                }
+                frame[14] = (ulong)written;
+                return;
+            }
+
+            // name-taking subfunctions
+            ulong nlen = rsi;
+            if (nlen == 0 || nlen > 260 || !UserPtr(rdi, (int)nlen)) { frame[14] = unchecked((ulong)-5); return; }
+            char* cname = stackalloc char[260];
+            for (int i = 0; i < (int)nlen; i++) cname[i] = (char)((byte*)rdi)[i];
+
+            int idx = Users.Find(cname, (int)nlen);
+            bool isRoot = Scheduler.CurrentUid() == 0;
+
+            switch (sub)
+            {
+                case 1: // ADD (root only)
+                    if (!isRoot) { frame[14] = unchecked((ulong)-3); return; }
+                    ulong plen = rcx;
+                    char* cpass = stackalloc char[260];
+                    if (plen > 0) { if (!UserPtr(rdx, (int)plen)) { frame[14] = unchecked((ulong)-1); return; } for (int i = 0; i < (int)plen; i++) cpass[i] = (char)((byte*)rdx)[i]; }
+                    if (!Users.Add(cname, (int)nlen, cpass, (int)plen)) { frame[14] = unchecked((ulong)-6); return; } // ENOMEM (includes exists/invalid)
+                    frame[14] = 0;
+                    return;
+                case 2: // CHANGEPASS (root or own)
+                    if (idx < 0) { frame[14] = unchecked((ulong)-4); return; }
+                    if (!isRoot && Users.UidAt(idx) != Scheduler.CurrentUid()) { frame[14] = unchecked((ulong)-3); return; }
+                    ulong plen2 = rcx;
+                    char* cpass2 = stackalloc char[260];
+                    if (plen2 > 0) { if (!UserPtr(rdx, (int)plen2)) { frame[14] = unchecked((ulong)-1); return; } for (int i = 0; i < (int)plen2; i++) cpass2[i] = (char)((byte*)rdx)[i]; }
+                    if (!Users.ChangePassword(idx, cpass2, (int)plen2)) { frame[14] = unchecked((ulong)-5); return; }
+                    frame[14] = 0;
+                    return;
+                case 3: // DEL (root only, not root user)
+                    if (!isRoot) { frame[14] = unchecked((ulong)-3); return; }
+                    if (idx < 0) { frame[14] = unchecked((ulong)-4); return; }
+                    if (Users.UidAt(idx) == 0) { frame[14] = unchecked((ulong)-5); return; } // cannot delete root
+                    if (!Users.Del(idx)) { frame[14] = unchecked((ulong)-5); return; }
+                    frame[14] = 0;
+                    return;
+                case 4: // SUDO (root only)
+                    if (!isRoot) { frame[14] = unchecked((ulong)-3); return; }
+                    if (idx < 0) { frame[14] = unchecked((ulong)-4); return; }
+                    Users.AddSudoer(idx);
+                    frame[14] = 0;
+                    return;
+                case 5: // UNSUDO (root only)
+                    if (!isRoot) { frame[14] = unchecked((ulong)-3); return; }
+                    if (idx < 0) { frame[14] = unchecked((ulong)-4); return; }
+                    Users.DelSudoer(idx);
+                    frame[14] = 0;
+                    return;
+                default:
+                    frame[14] = unchecked((ulong)-5); return;
+            }
         }
 
         frame[14] = unchecked((ulong)-2); // ENOSYS

@@ -32,6 +32,7 @@ internal static unsafe class ConsoleInput
     private static bool _ctrl;        // PS/2 ctrl currently held
     private static bool _caps;        // PS/2 caps lock on/off (toggled)
     private static bool _extended;    // PS/2 0xE0 prefix seen
+    private static bool _ctrlCPending;// a Ctrl+C press is waiting to be consumed
 
     // Serial path: bytes are already ASCII (control bytes handled by the IRQ).
     public static void PushSerial(byte c)
@@ -47,9 +48,11 @@ internal static unsafe class ConsoleInput
 
     // A Ctrl+C was pressed (from serial 0x03 or PS/2 Ctrl+C). Pushed IN BAND as
     // CtrlCMark so Pop returns -2 at the exact arrival position, not after all
-    // buffered bytes have been drained.
+    // buffered bytes have been drained. Also sets the pending flag so blocking
+    // syscalls (WAIT) can detect it without draining the ring.
     public static void RequestCtrlC()
     {
+        _ctrlCPending = true;
         int next = _ring.tail + 1;
         if (next >= 256) next = 0;
         if (next != _ring.head)
@@ -58,6 +61,12 @@ internal static unsafe class ConsoleInput
             _ring.tail = next;
         }
     }
+
+    // True when a Ctrl+C has arrived and not yet been consumed.
+    public static bool CtrlCPending => _ctrlCPending;
+
+    // Consume the pending Ctrl+C flag. Called by WAIT when it returns -7 EINTR.
+    public static void ConsumeCtrlCPending() { _ctrlCPending = false; }
 
     // PS/2 path: a raw scancode from IRQ1. Translates to ASCII and pushes.
     // Tracks shift/ctrl/caps so Ctrl+C is caught here (Keyboard consumes it for

@@ -44,6 +44,7 @@ namespace Osb.Kernel
         Scheduler.Init();       // console (slot 0) + kernel address space
         Font.Init();            // embedded 8x8 font table
         Mouse.Init();           // PS/2 mouse on IRQ12
+        Keyboard.Init();        // PS/2 keyboard on IRQ1
 
         Vga.WriteLine("OSB - Operating System Basic");
         Vga.WriteLine("Bootable kernel prototype (C# / NativeAOT, bare metal)");

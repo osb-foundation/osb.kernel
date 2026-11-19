@@ -280,6 +280,20 @@ echo "[x/6] Compiling ring-3 programs ..."
 source "$ROOT/scripts/stage-ring3.sh"
 stage_ring3
 
+# ----- stage KISS editor (OSLANG script) at /OSB/BIN/KISS/ -----
+KISS_DIR="$ROOT/../osb.oslang/samples/kiss"
+if [[ -d "$KISS_DIR" ]]; then
+    echo "  staging KISS editor ..."
+    # mkdir is benign if the directory already exists (rebuild)
+    debugfs -w -R "mkdir /OSB/BIN/KISS" "$OUT_IMG" 2>/dev/null || true
+    for f in "$KISS_DIR"/*; do
+        [[ -f "$f" ]] || continue
+        name="$(basename "$f")"
+        dbg debugfs -w -R "write \"$f\" /OSB/BIN/KISS/$name" "$OUT_IMG"
+        echo "    staged /OSB/BIN/KISS/$name"
+    done
+fi
+
 echo "[5/6] Building ISO ..."
 rm -rf "$ISO_DIR"
 mkdir -p "$ISO_DIR/boot/grub"

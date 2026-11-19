@@ -110,7 +110,7 @@ Main namespaces/classes:
     `GrepCommand` (`GREP [/I] pattern [file]` line filter; without [file]
     it filters piped stdin).
 - `Kernel` partial classes
-  - Boot orchestration + embedded OSLANG 0.72 interpreter.
+  - Boot orchestration: serial/VGA, PIC/PIT/RTC, GDT, memory, scheduler, userspace shell spawn.
 - `MiniCoreLib` (linked from `../osb.core/src/MiniCoreLib.cs`)
   - Minimal runtime/type stubs required for freestanding NativeAOT; the single
     canonical copy lives in osb.core — never add a local one here.
@@ -133,14 +133,10 @@ Key subsystem concepts:
   appends it after the first `\n` of B's command line; `GREP` reads it
   there. Pipelines run in the foreground.
 
-Embedded language:
-
-- OSLANG 0.72 interpreter lives in `Kernel` partial classes.
-- Value kinds: null, bool, number, string, array, object, enum, function.
-- Supports classes, interfaces, enums, functions, lambdas, arrays, try/catch,
-  events, OOP member resolution.
-- Built-in OSL APIs include `OSL.CONSOLE.*`, `OSL.FILE.*`, `OSL.APP.*`,
-  plus standard math/conversion functions.
+Embedded language: none. OSLANG was removed from the kernel in phase O0
+(2026-11-19); the port is archived read-only at
+`osb.oslang/archive/kernel-port/` and the Ring-3 interpreter ships as
+`A:\OSB\BIN\OSLANG.EXE` (see `osb.oslang/OSLANG-PLAN.md`, phase O0).
 
 ## Coding standards
 
@@ -238,4 +234,4 @@ Validation expectations:
 
 - `README.md`: high-level project/user documentation.
 - `ROADMAP.md`: planned vertical slices and architecture decisions.
-- `OSLANG-SPEC-UNIFIED.md`: language specification (if present in repo).
+- `osb.oslang/OSLANG-SPEC.md` (+ per-version `OSLANG-0.*-SPEC.md`): language specification.

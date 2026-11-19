@@ -1,6 +1,6 @@
 // Physical frame allocator: a flat bitmap over the RAM reported by the
 // Multiboot2 memory map (capped at the 64 GiB covered by the boot-time
-// identity map). Address spaces (AddressSpace.cs) and the OSLANG arena
+// identity map). Address spaces (AddressSpace.cs) and any ring-3 arena
 // carve their blocks from here.
 
 using Osb.Kernel.Hardware;

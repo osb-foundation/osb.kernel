@@ -132,6 +132,11 @@ dependem de FS com dono (L4) que depende de processos isolados (L2).
 ### Fatia 8 — Conforto DOS
 - ~~`.BAT`~~ → **decidido**: não existem `.BAT` nem `AUTOEXEC.BAT`. Scripts vindos em
   OSH (linguagem de shell) e programas interpretados OSLANG (`.OSL`).
+
+  **OSLANG foi removido do kernel em O0 (2026-11-19).** Scripts `.OSL` não rodam
+  mais até O6 instalar `A:\OSB\BIN\OSLANG.EXE` (ver `osb.oslang/OSLANG-PLAN.md`).
+  O código do port foi arquivado em `osb.oslang/archive/kernel-port/` (somente
+  leitura, não é construído).
 - **Antecipado neste ponto do projeto:** variáveis de ambiente `$VAR` (nomes
   case-insensitive, valores preservados), `SET [NAME]` / `SET NAME=value`,
   `PROMPT` DOS (`$P $G $N $D $T $V ...` + qualquer `$VAR`) — ✅ implementado.

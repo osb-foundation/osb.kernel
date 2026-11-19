@@ -167,7 +167,6 @@ Osb.Kernel/            (this repo is the kernel; repos live side by side)
 │   ├── ShellText.cs    # text comparisons/parse/padding
 │   └── Commands/       # SystemCommands, EnvironmentCommands, FileCommands,
 │                       # UserCommands (USER/LOGIN/CHOWN/CHMOD/SUDO), TaskCommands
-├── OslangKernel.cs     # OSLANG 0.72 interpreter (lexer/parser/runtime) in the kernel
 ├── boot.S              # Multiboot2 bootstrap: 32-bit -> long mode -> calls kmain
 │                       # (+ helpers: outb/inb, mem*, lidt, sti/cli, halt, lgdt/ltr,
 │                       #  enter_user, load_cr3, kernel page tables)
@@ -296,3 +295,4 @@ releases input.
 - **Resource failure on user fault**: an exception with CS.RPL==3 is treated as a program
   failure (prints vector/err/RIP, marks the task as **zombie** with code `-1` and schedules
   another); CPL0 exceptions remain fatal panics.
+See OSB-ARCHITECTURE.md

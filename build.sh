@@ -105,12 +105,7 @@ fi
 # image copy — see osb.shell/tests/golden/golden.sh patch_boot).
 printf '%s\n' "${OSB_BOOT_PROGRAM:-A:\\OSB\\BIN\\SHELL.EXE}" > "$OBJ/fs/boot.txt"
 
-# Seed the OSLANG example/regression scripts (kept as files under seed/ so
-# build.sh stays under the 400-line limit; review item 7).
-mkdir -p "$OBJ/fs/apps"
-cp "$ROOT"/seed/apps/*.osl "$OBJ/fs/apps/"
-
-{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/APPS/PHASE0.OSL\n' "$OBJ/fs/apps/phase0.osl"; printf 'write "%s" /OSB/APPS/PHASE1.OSL\n' "$OBJ/fs/apps/phase1.osl"; printf 'write "%s" /OSB/APPS/PHASE2.OSL\n' "$OBJ/fs/apps/phase2.osl"; printf 'write "%s" /OSB/APPS/SIMPLE.OSL\n' "$OBJ/fs/apps/simple.osl"; printf 'write "%s" /OSB/APPS/HELLO.OSL\n' "$OBJ/fs/apps/hello.osl"; printf 'write "%s" /OSB/APPS/CLASS_DEMO.OSL\n' "$OBJ/fs/apps/class_demo.osl"; printf 'write "%s" /OSB/APPS/SIMPLE_CLASS.OSL\n' "$OBJ/fs/apps/simple_class.osl"; printf 'write "%s" /OSB/APPS/ENUM_DEMO.OSL\n' "$OBJ/fs/apps/enum_demo.osl"; printf 'write "%s" /OSB/APPS/DOWHILE.OSL\n' "$OBJ/fs/apps/dowhile.osl"; printf 'write "%s" /OSB/APPS/TRYCATCH.OSL\n' "$OBJ/fs/apps/trycatch.osl"; printf 'write "%s" /OSB/APPS/TEST_FUNC.OSL\n' "$OBJ/fs/apps/test_func.osl"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; printf 'write "%s" /OSB/CONF/BOOT\n' "$OBJ/fs/boot.txt"; } > "$OBJ/fs/populate2.txt"
+{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; printf 'write "%s" /OSB/CONF/BOOT\n' "$OBJ/fs/boot.txt"; } > "$OBJ/fs/populate2.txt"
 dbg debugfs -w -f "$OBJ/fs/populate2.txt" "$OUT_IMG"
 # debugfs "write" does not update the inode/block bitmaps: reconcile them or the
 # kernel's allocators would hand out the seeded files' inodes (e.g. SUDOERS).

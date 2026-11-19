@@ -110,6 +110,18 @@ namespace Osb.Kernel
         while (true) { NativeMethods.hlt_cpu(); }
     }
 
+    // Allocate n byte-aligned frames from the physical frame allocator and
+    // return them as a pointer (the kernel is identity-mapped, so the physical
+    // address doubles as the virtual address). Returns null on failure.
+    public static unsafe void* OsAlloc(int bytes)
+    {
+        int frames = (bytes + Layout.FrameSize - 1) / Layout.FrameSize;
+        if (frames == 0) return null;
+        ulong phys = PhysicalMemory.Alloc(frames, Layout.FrameSize);
+        if (phys == 0) return null;
+        return (void*)phys;
+    }
+
     // Reads A:\OSB\CONF\BOOT (first line, trailing spaces trimmed) into path.
     // Returns the length, or 0 when the file is missing/empty/unreadable.
     private static int ReadBootProgram(char* path, int cap)

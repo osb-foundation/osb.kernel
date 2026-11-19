@@ -60,9 +60,9 @@ internal static unsafe class Users
 
         if (!LoadPasswd())
         {
-            // fresh image: root only, password "root", home A:\OSB\ROOT
+            // fresh image: root only, passwordless, home A:\OSB\ROOT
             _users.count = 0;
-            AddEntry("root", "root", 0, "A:\\OSB\\ROOT");
+            AddEntry("root", "", 0, "A:\\OSB\\ROOT");
             _users.sudoers[0] = 1;
             SavePasswd();
         }

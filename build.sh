@@ -86,16 +86,16 @@ mkdir /OSB/ROOT/TRASH
 EOF
 printf 'OSB File System test.\nCase-sensitive filenames: ON\nHome is A:\\OSB\\ROOT.\n' > "$OBJ/fs/welcome.txt"
 
-# Login system seeds: PASSWD (root, password "root", uid 0, home A:\OSB\ROOT) and
+# Login system seeds: PASSWD (root, passwordless, uid 0, home A:\OSB\ROOT) and
 # SUDOERS. WITH_TESTS=1 additionally seeds a non-root non-sudoer (tester, uid 1)
 # and a non-root sudoer (sudoer, uid 2) for the 1c security tests (I5); the
 # default image ships root only.
 if [[ "${WITH_TESTS:-0}" == "1" ]]; then
-    printf 'root:root:0:A:\\OSB\\ROOT\ntester:pw:1:A:\\OSB\\HOME\\tester\nsudoer:pw:2:A:\\OSB\\HOME\\sudoer\nabcdefghijklmno:pw:3:A:\\OSB\\HOME\\abcdefghijklmno\n' > "$OBJ/fs/passwd.txt"
+    printf 'root::0:A:\\OSB\\ROOT\ntester:pw:1:A:\\OSB\\HOME\\tester\nsudoer:pw:2:A:\\OSB\\HOME\\sudoer\nabcdefghijklmno:pw:3:A:\\OSB\\HOME\\abcdefghijklmno\n' > "$OBJ/fs/passwd.txt"
     printf 'root\nsudoer\n' > "$OBJ/fs/sudoers.txt"
     printf 'mkdir /OSB/HOME/tester\nmkdir /OSB/HOME/sudoer\nmkdir /OSB/HOME/abcdefghijklmno\n' >> "$OBJ/fs/populate.txt"
 else
-    printf 'root:root:0:A:\\OSB\\ROOT\n' > "$OBJ/fs/passwd.txt"
+    printf 'root::0:A:\\OSB\\ROOT\n' > "$OBJ/fs/passwd.txt"
     printf 'root\n' > "$OBJ/fs/sudoers.txt"
 fi
 

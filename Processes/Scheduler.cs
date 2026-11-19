@@ -71,6 +71,7 @@ internal static unsafe partial class Scheduler
         public fixed int fhWrite[Count * 8];          // file handle: 1 = write mode
         public fixed int stdoutH[Count];              // per-task stdout handle (-1 = VGA)
         public fixed int stdinH[Count];               // per-task stdin handle (-1 = console)
+        public fixed int userFrames[Count];           // additional user frames (4 KiB each) beyond base 2 MiB
     }
 
     private unsafe struct StackPool { public fixed byte bytes[Count * Layout.StackSize]; }
@@ -115,6 +116,7 @@ internal static unsafe partial class Scheduler
             _tasks.gid[i] = 0;
             _tasks.stdoutH[i] = -1;
             _tasks.stdinH[i] = -1;
+            _tasks.userFrames[i] = 0;
         }
         // Slot 0 is the shell/console, running on the boot stack in the kernel
         // address space. Its saved SP is captured by the first osb_switch out.
@@ -145,198 +147,8 @@ internal static unsafe partial class Scheduler
         }
         int n = 0;
         while (n < Layout.MaxName && t.Name[n] != 0) n++;
-        t.NameLen = n;
+t.NameLen = n;
         return t;
-    }
-
-    // File handle helpers (Slice 4): per-task, 8 handles per slot.
-    public static int FileOpen(int slot, uint ino, int size)
-    {
-        for (int h = 0; h < 8; h++)
-        {
-            int hi = slot * 8 + h;
-            if (_tasks.fhUsed[hi] == 0)
-            {
-                _tasks.fhUsed[hi] = 1;
-                _tasks.fhInode[hi] = (int)ino;
-                _tasks.fhOff[hi] = 0;
-                _tasks.fhSize[hi] = size;
-                return hi;   // global handle id
-            }
-        }
-        return -1;
-    }
-
-    public static int FileRead(int handle, byte* buf, int count)
-    {
-        if (handle < 0 || handle >= Count * 8) return -1;
-        if (_tasks.fhUsed[handle] == 0) return -1;
-        int ino = _tasks.fhInode[handle];
-        int off = _tasks.fhOff[handle];
-        int size = _tasks.fhSize[handle];
-        if (off >= size) return 0;
-        int want = count;
-        if (want > size - off) want = size - off;
-        if (want <= 0) return 0;
-        // read via Ext4: need inode + block walk
-        byte* inode = stackalloc byte[256];
-        if (!Storage.Ext4.ReadInode((uint)ino, inode)) return -1;
-        int got = 0;
-        while (got < want)
-        {
-            ulong blockIndex = (ulong)(off + got) / (ulong)Storage.Ext4.BlockSize;
-            int blockOff = (off + got) % Storage.Ext4.BlockSize;
-            uint bnum = Storage.Ext4.InodeGetBlock(inode, blockIndex);
-            if (bnum == 0) break;
-            byte* blk = stackalloc byte[Storage.Ext4.BlockSize];
-            Storage.Ext4.ReadBlock(bnum, blk);
-            int avail = Storage.Ext4.BlockSize - blockOff;
-            if (avail > want - got) avail = want - got;
-            for (int k = 0; k < avail; k++) buf[got + k] = blk[blockOff + k];
-            got += avail;
-        }
-        _tasks.fhOff[handle] = off + got;
-        return got;
-    }
-
-    public static void FileClose(int handle)
-    {
-        if (handle < 0 || handle >= Count * 8) return;
-        _tasks.fhUsed[handle] = 0;
-    }
-
-    // Create or truncate a file for writing, return a write handle.
-    public static int FileCreate(int slot, uint ino)
-    {
-        for (int h = 0; h < 8; h++)
-        {
-            int hi = slot * 8 + h;
-            if (_tasks.fhUsed[hi] == 0)
-            {
-                _tasks.fhUsed[hi] = 1;
-                _tasks.fhInode[hi] = (int)ino;
-                _tasks.fhOff[hi] = 0;
-                _tasks.fhSize[hi] = 0;
-                _tasks.fhWrite[hi] = 1;   // write mode
-                return hi;
-            }
-        }
-        return -1;
-    }
-
-    // Write data to a write-mode file handle, extending the file as needed.
-    public static int FileWrite(int handle, byte* data, int count)
-    {
-        if (handle < 0 || handle >= Count * 8) return -1;
-        if (_tasks.fhUsed[handle] == 0 || _tasks.fhWrite[handle] == 0) return -1;
-        int ino = _tasks.fhInode[handle];
-        int off = _tasks.fhOff[handle];
-
-        byte* inode = stackalloc byte[256];
-        if (!Storage.Ext4.ReadInode((uint)ino, inode)) return -1;
-
-        int written = 0;
-        while (written < count)
-        {
-            ulong blockIndex = (ulong)(off + written) / (ulong)Storage.Ext4.BlockSize;
-            int blockOff = (off + written) % (int)Storage.Ext4.BlockSize;
-            uint bnum = Storage.Ext4.InodeGetBlock(inode, blockIndex);
-            if (bnum == 0)
-            {
-                uint pb;
-                if (!Storage.Ext4.AllocBlock(out pb)) break;
-                // set block pointer in inode: InoBlock + index*4
-                int boff = Layout.InoBlock + (int)blockIndex * 4;
-                inode[boff] = (byte)(pb & 0xFF);
-                inode[boff + 1] = (byte)((pb >> 8) & 0xFF);
-                inode[boff + 2] = (byte)((pb >> 16) & 0xFF);
-                inode[boff + 3] = (byte)((pb >> 24) & 0xFF);
-                bnum = pb;
-            }
-            byte* blk = stackalloc byte[Storage.Ext4.BlockSize];
-            Storage.Ext4.ReadBlock(bnum, blk);
-            int avail = (int)Storage.Ext4.BlockSize - blockOff;
-            if (avail > count - written) avail = count - written;
-            for (int k = 0; k < avail; k++) blk[blockOff + k] = data[written + k];
-            Storage.Ext4.WriteBlock(bnum, blk);
-            written += avail;
-        }
-
-        _tasks.fhOff[handle] = off + written;
-        int newSize = off + written;
-        if (newSize > (int)Storage.Ext4.InodeGetSize(inode))
-        {
-            inode[Layout.InoSizeLo] = (byte)(newSize & 0xFF);
-            inode[Layout.InoSizeLo + 1] = (byte)((newSize >> 8) & 0xFF);
-            inode[Layout.InoSizeLo + 2] = (byte)((newSize >> 16) & 0xFF);
-            inode[Layout.InoSizeLo + 3] = (byte)((newSize >> 24) & 0xFF);
-        }
-        Storage.Ext4.WriteInode((uint)ino, inode);
-        return written;
-    }
-
-    public static bool IsFree(int slot) { return _tasks.state[slot] == Layout.TaskFree; }
-    public static bool IsReady(int slot) { return _tasks.state[slot] == Layout.TaskReady; }
-    public static bool IsZombie(int slot) { return _tasks.state[slot] == Layout.TaskZombie; }
-
-    // The effective uid of the task currently running (1c: the real session
-    // uid, not a hardcoded 0). Every permission check goes through this
-    // helper so the credential source is one place, not a scattered Pid==1 hack.
-    public static int CurrentUid() { return _tasks.uid[_current]; }
-
-    // Group id of the task currently running (used by the 6Ah exec check).
-    public static int CurrentGid() { return _tasks.gid[_current]; }
-
-    // Effective uid of the task in `slot`, for permission checks by slot.
-    public static int GetUid(int slot) { return _tasks.uid[slot]; }
-
-    // Stdout handle of the task currently running (-1 = VGA console).
-    public static int GetStdout() { return _tasks.stdoutH[_current]; }
-
-    // Set the stdout handle of the task currently running (-1 = VGA console).
-    public static void SetStdout(int handle) { _tasks.stdoutH[_current] = handle; }
-
-    // Stdin handle of the task currently running (-1 = console).
-    public static int GetStdin() { return _tasks.stdinH[_current]; }
-
-    // Set the stdin handle of the task currently running (-1 = console).
-    public static void SetStdin(int handle) { _tasks.stdinH[_current] = handle; }
-
-    // Copy the current task's file handles to `childSlot` (same relative offsets
-    // 0-7), and set the child's stdin/stdout handles from absolute indices
-    // (-1 = inherit console). Returns false if the child slot is invalid.
-    public static bool PropagateHandles(int childSlot, int stdinAbs, int stdoutAbs)
-    {
-        if (childSlot < 0 || childSlot >= Count) return false;
-        int parentBase = _current * 8;
-        int childBase = childSlot * 8;
-        for (int h = 0; h < 8; h++)
-        {
-            int pi = parentBase + h;
-            int ci = childBase + h;
-            _tasks.fhUsed[ci] = _tasks.fhUsed[pi];
-            _tasks.fhInode[ci] = _tasks.fhInode[pi];
-            _tasks.fhOff[ci] = _tasks.fhOff[pi];
-            _tasks.fhSize[ci] = _tasks.fhSize[pi];
-            _tasks.fhWrite[ci] = _tasks.fhWrite[pi];
-        }
-        // Convert parent-absolute handle indices to child-absolute (same rel offset)
-        _tasks.stdinH[childSlot] = (stdinAbs >= 0) ? childBase + (stdinAbs - parentBase) : -1;
-        _tasks.stdoutH[childSlot] = (stdoutAbs >= 0) ? childBase + (stdoutAbs - parentBase) : -1;
-        return true;
-    }
-
-    // Find a live (ready) or zombie slot by pid; false if unknown.
-    public static bool TryFindPid(int pid, out int slot)
-    {
-        for (int i = 0; i < Count; i++)
-            if (_tasks.pid[i] == pid && (i == Console || _tasks.state[i] != Layout.TaskFree))
-            {
-                slot = i;
-                return true;
-            }
-        slot = -1;
-        return false;
     }
 
     // Seed a task's kernel stack so the first switch into it lands at `entry`.
@@ -348,58 +160,6 @@ internal static unsafe partial class Scheduler
         for (int i = 0; i < 6; i++) *(ulong*)(sp + (ulong)i * 8) = 0;
         *(ulong*)(sp + 48) = entry;
         return sp;
-    }
-
-    // Top (16-byte aligned) of a slot's kernel stack: what the TSS RSP0 needs.
-    public static ulong KernelStackTop(int slot)
-    {
-        fixed (byte* p = _stacks.bytes)
-            return ((ulong)p + (ulong)slot * Layout.StackSize + Layout.StackSize) & ~(ulong)15;
-    }
-
-    private static void SetName(int slot, string name)
-    {
-        int o = slot * Layout.MaxName;
-        for (int i = 0; i < Layout.MaxName; i++) _tasks.name[o + i] = 0;
-        int n = name.Length; if (n > Layout.MaxName - 1) n = Layout.MaxName - 1;
-        fixed (char* p = name)
-        {
-            for (int i = 0; i < n; i++) _tasks.name[o + i] = (byte)p[i];
-        }
-    }
-
-    // Name from a char buffer (external commands carry no managed string).
-    private static void SetNameChars(int slot, char* name, int len)
-    {
-        int o = slot * Layout.MaxName;
-        for (int i = 0; i < Layout.MaxName; i++) _tasks.name[o + i] = 0;
-        if (len > Layout.MaxName - 1) len = Layout.MaxName - 1;
-        for (int i = 0; i < len; i++) _tasks.name[o + i] = (byte)name[i];
-    }
-
-    // The argument string handed to an external program (read back by the
-    // AH=23h syscall). Trailing spaces are trimmed.
-    public static void SetArgs(int slot, char* args, int len)
-    {
-        int o = slot * ArgsCap;
-        for (int i = 0; i < ArgsCap; i++) _tasks.args[o + i] = 0;
-        while (len > 0 && args[len - 1] == ' ') len--;
-        if (len > ArgsCap - 1) len = ArgsCap - 1;
-        for (int i = 0; i < len; i++) _tasks.args[o + i] = (byte)args[i];
-    }
-
-    // Copies the current task's argument string out (0-terminated).
-    public static int GetArgs(int slot, byte* dst, int cap)
-    {
-        int o = slot * ArgsCap;
-        int n = 0;
-        while (n < ArgsCap - 1 && _tasks.args[o + n] != 0 && n < cap - 1)
-        {
-            dst[n] = _tasks.args[o + n];
-            n++;
-        }
-        dst[n] = 0;
-        return n;
     }
 
     private static int AllocSlot()
@@ -455,6 +215,13 @@ internal static unsafe partial class Scheduler
     {
         if (slot <= Console) return;
         AddressSpace.Release(_tasks.ublock[slot], _tasks.ptphys[slot]);
+        // Free additional user frames
+        int frames = _tasks.userFrames[slot];
+        if (frames > 0)
+        {
+            PhysicalMemory.FreeFrames(frames);
+            _tasks.userFrames[slot] = 0;
+        }
         _tasks.ublock[slot] = 0;
         _tasks.ptphys[slot] = 0;
         _tasks.cr3[slot] = AddressSpace.Master;

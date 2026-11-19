@@ -144,4 +144,21 @@ internal static unsafe class ConsoleInput
         }
         return -1;
     }
+
+    // Blocking version for CONS_KEY GETKEY (sub=0). Waits until a byte or Ctrl+C is available.
+    public static int PopBlocking()
+    {
+        while (true)
+        {
+            int result = Pop();
+            if (result != -1) return result;
+            // No data available, halt CPU until next interrupt
+            NativeMethods.hlt_cpu();
+        }
+    }
+    
+    public static bool Available()
+    {
+        return _ring.head != _ring.tail;
+    }
 }

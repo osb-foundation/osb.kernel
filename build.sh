@@ -334,5 +334,13 @@ case "${1:-}" in
     ;;
   check)
     grub-file --is-x86-multiboot2 "$OBJ/kernel.elf" && echo "kernel.elf: Multiboot2 OK"
+    # ABI version consistency check: verify AbiVersion constant in source
+    EXPECTED_ABI=8
+    if grep -q "public const int AbiVersion = $EXPECTED_ABI;" "$ROOT/Cpu/Syscalls.cs"; then
+        echo "ABI version: $EXPECTED_ABI OK (source constant verified)"
+    else
+        echo "ERROR: ABI version mismatch in source!" >&2
+        exit 1
+    fi
     ;;
 esac

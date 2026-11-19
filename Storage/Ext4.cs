@@ -119,26 +119,59 @@ internal static unsafe class Ext4
     public static unsafe uint InodeGetUid(byte* n) { return Rd16(n, Layout.InoUid); }
     public static unsafe uint InodeGetGid(byte* n) { return Rd16(n, Layout.InoGid); }
     public static unsafe uint InodeGetLinks(byte* n) { return Rd16(n, Layout.InoLinks); }
+    public static unsafe void InodeIncLinks(byte* n) { Wr16(n, Layout.InoLinks, (ushort)(Rd16(n, Layout.InoLinks) + 1)); }
+    public static unsafe void InodeSetBlock(byte* inode, int idx, uint block) { SetBlockPtr(inode, idx, block); }
     public static unsafe uint InodeGetMtime(byte* n) { return Rd32(n, Layout.InoMtime); }
 
+    // Get inode size (lo + hi 32 bits combined)
     public static unsafe uint InodeGetSize(byte* n)
     {
-        ulong hi = Rd32(n, Layout.InoSizeHi);
-        ulong lo = Rd32(n, Layout.InoSizeLo);
-        ulong sz = (hi << 32) | lo;
-        return sz > 0xFFFFFFFFUL ? 0xFFFFFFFFU : (uint)sz;
+        uint lo = Rd32(n, Layout.InoSizeLo);
+        uint hi = Rd32(n, Layout.InoSizeHi);
+        return lo | (hi << 32);
     }
 
-    public static unsafe uint InodeGetBlocks(byte* n)
+    // Check if inode is a regular file (type 0x8000)
+    public static unsafe bool IsReg(ushort mode) { return (mode & 0xF000) == 0x8000; }
+
+    // Initialize a new directory with . and .. entries
+    public static unsafe bool InitDirectory(uint dirIno, uint parentIno)
     {
-        ulong lo = Rd32(n, Layout.InoBlocksLo);
-        ulong hi = (ulong)Rd16(n, Layout.InoBlocksHi);
-        ulong b = lo | (hi << 32);
-        return b > 0xFFFFFFFFUL ? 0xFFFFFFFFU : (uint)b;
+        if (!_mounted && !Mount()) return false;
+        byte* inode = stackalloc byte[256];
+        if (!ReadInode(dirIno, inode)) return false;
+        if (!IsDir(InodeGetMode(inode))) return false;
+
+        uint block;
+        if (!AllocBlock(out block)) return false;
+        SetBlockPtr(inode, 0, block);
+        SetInodeSize(inode, (uint)BlockSize);
+        SetInodeBlocks(inode, 8);
+
+        byte* blk = stackalloc byte[BlockSize];
+        for (int k = 0; k < BlockSize; k++) blk[k] = 0;
+
+        // . entry
+        Wr32(blk, Layout.DirIno, dirIno);
+        Wr16(blk, Layout.DirRecLen, 12);
+        blk[Layout.DirNameLen] = 1;
+        blk[Layout.DirType] = 2;
+        blk[Layout.DirName] = (byte)'.';
+
+        // .. entry
+        Wr32(blk, 12 + Layout.DirIno, parentIno);
+        Wr16(blk, 12 + Layout.DirRecLen, (ushort)(BlockSize - 12));
+        blk[12 + Layout.DirNameLen] = 2;
+        blk[12 + Layout.DirType] = 2;
+        blk[12 + Layout.DirName] = (byte)'.';
+        blk[13 + Layout.DirName] = (byte)'.';
+
+        WriteBlock(block, blk);
+        WriteInode(dirIno, inode);
+        return true;
     }
 
     public static bool IsDir(ushort mode) { return (mode & 0xF000) == 0x4000; }
-    public static bool IsReg(ushort mode) { return (mode & 0xF000) == 0x8000; }
 
     public static unsafe bool IsExtentInode(byte* inode)
     {
@@ -855,6 +888,90 @@ internal static unsafe class Ext4
             }
         }
         return false;
+    }
+
+    // Recursively delete a directory tree (path is absolute, e.g. "A:\OSB\HOME\user")
+    public static unsafe bool DeleteTree(char* path, int len)
+    {
+        if (len <= 0) return false;
+        if (!_mounted && !Mount()) return false;
+
+        // Split path into parent directory and base name
+        int baseStart = len - 1;
+        while (baseStart >= 0 && path[baseStart] != '\\') baseStart--;
+        if (baseStart < 0) return false; // no parent
+
+        uint parentIno;
+        char* parentPath = path;
+        int parentLen = baseStart;
+        if (!Resolve(parentPath, parentLen, out parentIno)) return false;
+
+        char* baseName = path + baseStart + 1;
+        int baseLen = len - baseStart - 1;
+
+        uint ino;
+        if (!Resolve(path, len, out ino)) return false;
+        byte* inode = stackalloc byte[256];
+        if (!ReadInode(ino, inode)) return false;
+
+        // If it's a file or symlink, just unlink it from parent
+        if (IsReg(InodeGetMode(inode)) || IsSymlinkMode(InodeGetMode(inode)))
+        {
+            return DirRemoveEntry(parentIno, baseName, baseLen);
+        }
+
+        // It's a directory - recurse into it
+        if (!IsDir(InodeGetMode(inode))) return false;
+
+        // Iterate directory entries and delete children
+        uint size = InodeGetSize(inode);
+        uint blocks = size == 0 ? 0 : (size + (uint)BlockSize - 1) / (uint)BlockSize;
+        if (blocks == 0) blocks = 1;
+        byte* blk = stackalloc byte[BlockSize];
+
+        for (uint b = 0; b < blocks; b++)
+        {
+            uint bnum = InodeGetBlock(inode, b);
+            if (bnum == 0) continue;
+            ReadBlock(bnum, blk);
+            int off = 0;
+            while (off + 8 <= BlockSize)
+            {
+                byte* de = blk + off;
+                ushort rlen = DirEntryRecLen(de);
+                if (rlen == 0) break;
+                uint childIno = DirEntryInode(de);
+                byte childType = DirEntryType(de);
+                byte nlen = DirEntryNameLen(de);
+                if (childIno != 0 && nlen > 0)
+                {
+                    // Skip . and ..
+                    if (nlen == 1 && de[Layout.DirName] == '.') { off += rlen; continue; }
+                    if (nlen == 2 && de[Layout.DirName] == '.' && de[Layout.DirName + 1] == '.') { off += rlen; continue; }
+
+                    // Build child path
+                    char* childPath = stackalloc char[160];
+                    int clen = 0;
+                    for (int i = 0; i < len; i++) childPath[clen++] = path[i];
+                    childPath[clen++] = '\\';
+                    for (int i = 0; i < nlen; i++) childPath[clen++] = (char)de[Layout.DirName + i];
+
+                    if (childType == 2) // directory
+                    {
+                        if (!DeleteTree(childPath, clen)) return false;
+                    }
+                    else // file or symlink
+                    {
+                        if (!DirRemoveEntry(ino, (char*)de + Layout.DirName, nlen)) return false;
+                    }
+                }
+                off += rlen;
+                if (off > BlockSize - 8) break;
+            }
+        }
+
+        // Remove the directory itself from parent
+        return DirRemoveEntry(parentIno, baseName, baseLen);
     }
 
     public static unsafe bool DirEntryExists(uint dirIno, char* name, int nameLen, out uint childIno, out byte childType)

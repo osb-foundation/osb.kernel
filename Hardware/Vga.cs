@@ -45,6 +45,12 @@ internal static unsafe class Vga
     public static byte Attr => _attr;
     public static int Width => Layout.VgaWidth;
     public static int Height => Layout.VgaHeight;
+    public static int Cols => Layout.VgaWidth;
+    public static int Rows => Layout.VgaHeight;
+    public static int CursorRow => _row;
+    public static int CursorCol => _col;
+    private static bool _cursorVisible = true;
+
     public static void SetColor(byte fg, byte bg)
     {
         if (fg == bg) return;
@@ -53,6 +59,61 @@ internal static unsafe class Vga
     public static void SetAttr(byte a)
     {
         _attr = a;
+    }
+
+    public static void ShowCursor(bool visible)
+    {
+        _cursorVisible = visible;
+        if (visible) UpdateCursorRegs();
+        else
+        {
+            // Hide cursor by moving it off-screen (shape=0)
+            NativeMethods.outb(0x3D4, 0x0A);
+            NativeMethods.outb(0x3D5, 0x20);
+        }
+    }
+
+    public static void ClearLine(int row)
+    {
+        if (row < 0 || row >= Layout.VgaHeight) return;
+        if (_capture) return;
+        ushort* vga = (ushort*)Layout.VgaBase;
+        int baseOff = row * Layout.VgaWidth;
+        for (int i = 0; i < Layout.VgaWidth; i++)
+            vga[baseOff + i] = (ushort)(' ' | (_attr << 8));
+        // Mirror to serial: ESC[K clears line from cursor to end
+        Serial.PutChar((char)27);
+        Serial.PutChar('[');
+        Serial.PutChar('K');
+    }
+
+    public static void ClearArea(int top, int left, int bottom, int right)
+    {
+        if (top < 0 || bottom >= Layout.VgaHeight || left < 0 || right >= Layout.VgaWidth || top > bottom || left > right) return;
+        if (_capture) return;
+        ushort* vga = (ushort*)Layout.VgaBase;
+        for (int r = top; r <= bottom; r++)
+        {
+            int baseOff = r * Layout.VgaWidth + left;
+            for (int c = left; c <= right; c++)
+                vga[baseOff + (c - left)] = (ushort)(' ' | (_attr << 8));
+        }
+        // Mirror to serial: clear area using multiple ESC[K
+        for (int r = top; r <= bottom; r++)
+        {
+            Serial.PutChar((char)27);
+            Serial.PutChar('[');
+            WriteSerialDec(r + 1);
+            Serial.PutChar(';');
+            WriteSerialDec(left + 1);
+            Serial.PutChar('H');
+            Serial.PutChar((char)27);
+            Serial.PutChar('[');
+            int areaWidth = right - left + 1;
+            char widthChar = (char)(areaWidth < 10 ? '0' + areaWidth : '?');
+            Serial.PutChar(widthChar);
+            Serial.PutChar('K');
+        }
     }
 
 
@@ -190,6 +251,14 @@ internal static unsafe class Vga
             Scroll();
     }
 
+    public static void PutCharAt(char c, int row, int col)
+    {
+        if (row < 0 || row >= Layout.VgaHeight || col < 0 || col >= Layout.VgaWidth) return;
+        if (_capture) return;
+        ushort* vga = (ushort*)Layout.VgaBase;
+        vga[row * Layout.VgaWidth + col] = (ushort)(c | (_attr << 8));
+    }
+
     // Mirror the logical cursor (_row/_col) into the CRTC so the hardware
     // cursor (the blinking block) follows every PutChar. Without this the CRTC
     // only moved on explicit SetCursor/WriteAt, so during line editing (which
@@ -299,5 +368,46 @@ internal static unsafe class Vga
             v = v * 10 + (ulong)(s[i] - '0');
         }
         return v;
+    }
+
+    // Frame buffering support (double-buffering for terminal apps)
+    private static ushort* _frameBuf = null;
+    private unsafe struct FrameBuf { public fixed ushort data[80 * 25]; }
+    private static FrameBuf _frameStorage;
+    private static bool _frameActive = false;
+
+    public static void BeginFrame()
+    {
+        if (_frameBuf == null)
+        {
+            fixed (ushort* p = _frameStorage.data) _frameBuf = p;
+        }
+        // Copy current VGA to frame buffer
+        ushort* vga = (ushort*)Layout.VgaBase;
+        for (int i = 0; i < Layout.VgaWidth * Layout.VgaHeight; i++)
+            _frameBuf[i] = vga[i];
+        _frameActive = true;
+    }
+
+    public static void EndFrame()
+    {
+        _frameActive = false;
+    }
+
+    public static void FlushFrame()
+    {
+        if (_frameBuf == null) return;
+        ushort* vga = (ushort*)Layout.VgaBase;
+        for (int i = 0; i < Layout.VgaWidth * Layout.VgaHeight; i++)
+            vga[i] = _frameBuf[i];
+        UpdateCursorRegs();
+        // Mirror to serial: full refresh
+        Serial.PutChar((char)27);
+        Serial.PutChar('[');
+        Serial.PutChar('2');
+        Serial.PutChar('J');
+        Serial.PutChar((char)27);
+        Serial.PutChar('[');
+        Serial.PutChar('H');
     }
 }

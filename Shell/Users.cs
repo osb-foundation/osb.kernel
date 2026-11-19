@@ -120,12 +120,63 @@ internal static unsafe class Users
 
     public static bool LoggedIn => _current >= 0;
 
+    // Session state
+    public static bool CurrentSessionActive => _current >= 0;
+    public static int CurrentSessionUid => _current >= 0 ? _users.uids[_current] : -1;
+
     // Table index of the logged-in user (-1 when nobody is logged in).
     public static int CurrentIndex => _current;
 
     public static void SetSession(int idx) => _current = idx;
 
     public static void Logout() => _current = -1;
+
+    // Logout session and kill all tasks except leader and kernel tasks
+    public static void LogoutSession(int leaderSlot)
+    {
+        if (!LoggedIn) return;
+        // Kill all tasks in this session
+        for (int i = 0; i < Scheduler.Count; i++)
+        {
+            if (i == Scheduler.Console || i == leaderSlot) continue;
+            if (Scheduler.IsReady(i) || Scheduler.IsZombie(i))
+            {
+                if (Scheduler.GetUid(i) == CurrentSessionUid)
+                {
+                    Scheduler.Release(i);
+                }
+            }
+        }
+        _current = -1;
+    }
+
+    // Login with name and password
+    public static bool Login(char* name, int nameLen, char* pass, int passLen)
+    {
+        int idx = Find(name, nameLen);
+        if (idx < 0) return false;
+        if (!PassMatches(idx, pass, passLen)) return false;
+        _current = idx;
+        return true;
+    }
+
+    public static bool GetHome(int uid, char* dst, ref int len)
+    {
+        int idx = IndexOfUid((uint)uid);
+        if (idx < 0) return false;
+        int n = HomeAt(idx, dst);
+        len = n;
+        return true;
+    }
+
+    public static int GetName(int uid, char* dst, int cap)
+    {
+        int idx = IndexOfUid((uint)uid);
+        if (idx < 0) return -1;
+        int n = NameAt(idx, dst);
+        if (n >= cap) n = cap - 1;
+        return n;
+    }
 
     // Runs the following commands as root (SUDO), restoring the session after.
     public static void BeginSudo()
@@ -550,7 +601,7 @@ internal static unsafe class Users
             uint existing; byte etype;
             if (!Ext4.DirEntryExists(parent, baseName, baseLen, out existing, out etype))
             {
-                if (!Ext4.AllocInode(out ino, 0x8180)) return;   // -rw-------
+                if (!Ext4.AllocInode(out ino, 0x8184)) return;   // -rw-r--r--
                 if (!Ext4.DirAddEntry(parent, baseName, baseLen, ino, 1)) { Ext4.FreeInode(ino); return; }
             }
             else

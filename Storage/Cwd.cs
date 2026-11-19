@@ -49,6 +49,15 @@ internal static unsafe class Cwd
         _len = len;
     }
 
+    // Resets to root directory "A:\"
+    public static void SetRoot()
+    {
+        _state.path[0] = (byte)'A';
+        _state.path[1] = (byte)':';
+        _state.path[2] = (byte)'\\';
+        _len = 3;
+    }
+
     // Writes the current directory to the console (prompt $P).
     public static void Print()
     {

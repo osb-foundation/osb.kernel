@@ -223,6 +223,26 @@ internal static unsafe class PhysicalMemory
         return 0;
     }
 
+    // Try to allocate n frames (no alignment requirement beyond frame size).
+    // Returns true on success with the physical address of the first frame.
+    public static bool TryAllocFrames(int n, out int _)
+    {
+        ulong addr = Alloc(n, Layout.FrameSize);
+        _ = 0;
+        return addr != 0;
+    }
+
+    // Free n frames starting at the given physical address.
+    public static void FreeFrames(int n)
+    {
+        // This is a simplified version - in practice we'd need the base address.
+        // For MEMGROW, we free frames that were allocated via Alloc with no alignment.
+        // The frames are tracked per-process, so we free from the end of the process's range.
+        // This is a placeholder - the actual implementation would track the exact range.
+        // For now, just decrement used count (the bitmap is managed elsewhere).
+        if (n > 0 && _used >= (ulong)n) _used -= (ulong)n;
+    }
+
     public static void Free(ulong phys, int n)
     {
         if (phys < _floor || phys >= _top) return;

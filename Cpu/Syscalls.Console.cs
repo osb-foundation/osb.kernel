@@ -100,10 +100,11 @@ internal static unsafe partial class Syscalls
         frame[14] = 0;
     }
 
-    // 6Eh GETCHAR: blocking character input (AH=6Eh), returns char in AL
+    // 6Eh GETCHAR: non-blocking character input (AH=6Eh), returns char in AL.
+    // Result: 0..255 = byte, -1 = empty, -2 = Ctrl+C. The shell's LineEditor
+    // depends on non-blocking behavior: on -1 it does Syscall.Sleep(1) and retries.
     private static void HandleGetChar(ulong* frame)
     {
-        int c = ConsoleInput.PopBlocking();
-        frame[14] = (ulong)(c & 0xFF);
+        frame[14] = unchecked((ulong)(long)ConsoleInput.Pop());
     }
 }

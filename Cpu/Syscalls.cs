@@ -92,9 +92,6 @@ internal static unsafe partial class Syscalls
         // Input
         if (func == 0x6E) { HandleGetChar(frame); return; }
 
-        // Character input (cooked)
-        if (func == 0x6E) { HandleGetChar(frame); return; }
-
         frame[14] = unchecked((ulong)-2); // ENOSYS
     }
 

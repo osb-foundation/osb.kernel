@@ -49,55 +49,6 @@ internal static unsafe class Keyboard
         return sc;
     }
 
-    // PS/2 controller ports
-    private const byte PortData = 0x60;
-    private const byte PortStatus = 0x64;
-    private const byte PortCommand = 0x64;
-
-public static void Init()
-    {
-        // Enable keyboard port on PS/2 controller (command 0xAE)
-        WaitWrite();
-        NativeMethods.outb(PortCommand, 0xAE);
-
-        // Reset keyboard (send 0xFF, expect 0xFA ACK then 0xAA BAT pass)
-        WriteKeyboard(0xFF);
-        ReadKeyboard(); // 0xFA ACK
-        ReadKeyboard(); // 0xAA BAT pass
-
-        // Set defaults (0xF6) - resets to defaults and enables scanning
-        WriteKeyboard(0xF6);
-        ReadKeyboard(); // 0xFA ACK
-
-        // Enable keyboard scanning (send 0xF4, expect 0xFA ACK)
-        WriteKeyboard(0xF4);
-        ReadKeyboard(); // 0xFA ACK
-    }
-
-    private static void WaitWrite()
-    {
-        for (int i = 0; i < 100000; i++)
-            if ((NativeMethods.inb(PortStatus) & 0x02) == 0) return;
-    }
-
-    private static void WaitRead()
-    {
-        for (int i = 0; i < 100000; i++)
-            if ((NativeMethods.inb(PortStatus) & 0x01) != 0) return;
-    }
-
-    private static void WriteKeyboard(byte cmd)
-    {
-        WaitWrite();
-        NativeMethods.outb(PortData, cmd);
-    }
-
-    private static byte ReadKeyboard()
-    {
-        WaitRead();
-        return NativeMethods.inb(PortData);
-    }
-
     public static void HandleScancode(byte sc)
     {
         if (sc == 0x1D) _kbdCtrl = true;             // Ctrl pressed

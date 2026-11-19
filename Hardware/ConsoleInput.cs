@@ -152,8 +152,8 @@ internal static unsafe class ConsoleInput
         {
             int result = Pop();
             if (result != -1) return result;
-            // No data available, halt CPU until next interrupt
-            NativeMethods.hlt_cpu();
+            // No data available, halt CPU until next interrupt (sti; hlt)
+            NativeMethods.halt();
         }
     }
     

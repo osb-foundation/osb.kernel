@@ -6,6 +6,19 @@ namespace Osb.Kernel.Hardware;
 
 internal static unsafe class Keyboard
 {
+    // PS/2 controller ports
+    private const byte KbdDataPort = 0x60;
+    private const byte KbdCommandPort = 0x64;
+
+    // PS/2 keyboard commands
+    private const byte KbdCmdReset = 0xFF;
+    private const byte KbdCmdEnableScanning = 0xF4;
+    private const byte KbdAck = 0xFA;
+    private const byte KbdSelfTestPass = 0xAA;
+
+    // PS/2 controller commands
+    private const byte CmdEnableKbdPort = 0xAE;
+
     // Scancode ring buffer filled by the IRQ1 handler, drained by the shell.
     private unsafe struct KbdRing
     {
@@ -17,6 +30,42 @@ internal static unsafe class Keyboard
     private static KbdRing _kbd;
     private static bool _kbdCtrl; // PS/2 Ctrl is currently held down
     private static bool _ctrlF4;  // a Ctrl+F4 was seen (consumed by the desktop)
+
+    public static void Init()
+    {
+        // Wait for controller input buffer empty
+        while ((NativeMethods.inb(KbdCommandPort) & 0x02) != 0) { }
+
+        // Enable keyboard port (0xAE)
+        NativeMethods.outb(KbdCommandPort, CmdEnableKbdPort);
+
+        // Wait for controller input buffer empty
+        while ((NativeMethods.inb(KbdCommandPort) & 0x02) != 0) { }
+
+        // Reset keyboard (0xFF to 0x60)
+        NativeMethods.outb(KbdDataPort, KbdCmdReset);
+
+        // Wait for ACK (0xFA)
+        while ((NativeMethods.inb(KbdCommandPort) & 0x01) == 0) { }
+        byte ack = NativeMethods.inb(KbdDataPort);
+        if (ack != KbdAck) return;
+
+        // Wait for self-test result (0xAA)
+        while ((NativeMethods.inb(KbdCommandPort) & 0x01) == 0) { }
+        byte result = NativeMethods.inb(KbdDataPort);
+        if (result != KbdSelfTestPass) return;
+
+        // Wait for controller input buffer empty
+        while ((NativeMethods.inb(KbdCommandPort) & 0x02) != 0) { }
+
+        // Enable scanning (0xF4 to 0x60)
+        NativeMethods.outb(KbdDataPort, KbdCmdEnableScanning);
+
+        // Wait for ACK (0xFA)
+        while ((NativeMethods.inb(KbdCommandPort) & 0x01) == 0) { }
+        ack = NativeMethods.inb(KbdDataPort);
+        // Ignore if not ACK - some keyboards don't ACK this command
+    }
 
     // Once-only read of the Ctrl+F4 event. Handled here rather than in the
     // consumer so the Ctrl state is the one that was true when F4 arrived, not

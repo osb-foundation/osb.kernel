@@ -124,8 +124,8 @@ no host operating system, no external framework — compiled with **NativeAOT**
 ```
 Osb.Kernel/            (this repo is the kernel; repos live side by side)
 ├── Osb.Kernel.csproj   # "no .NET" C# project: NoStdLib, nothing referenced;
-│                       # links ../osb.core/src/MiniCoreLib.cs (single source)
-├── MiniCoreLib.cs      # (linked from osb.core — do not keep a local copy)
+│                       # links ../osb.core/src/*.cs (single source)
+├── MiniCoreLib.cs      # (linked from osb.core/src — do not keep a local copy)
 ├── Kernel.cs           # only orchestration: Main/kmain (boot order) + banner
 ├── Hardware/           # kernel I/O boundary
 │   ├── Vga.cs          # 80x25 text mode (mirrors everything to COM1)
@@ -247,7 +247,7 @@ releases input.
 
 - ilc is located automatically in the NuGet cache
   (`runtime.linux-x64.microsoft.dotnet.ilcompiler`).
-- The mini-CoreLib (linked from `osb.core/src/MiniCoreLib.cs`) is the boundary of
+- The mini-CoreLib (linked from `osb.core/src/*.cs`) is the boundary of
   the "runtime": everything C# requires without an OS.
   Keep it small; no GC/allocation — the kernel uses fixed buffers/stackalloc.
 - `interrupts.S` is generated deterministically by `build.sh` (256 stubs: each pushes

@@ -111,7 +111,7 @@ Main namespaces/classes:
     it filters piped stdin).
 - `Kernel` partial classes
   - Boot orchestration: serial/VGA, PIC/PIT/RTC, GDT, memory, scheduler, userspace shell spawn.
-- `MiniCoreLib` (linked from `../osb.core/src/MiniCoreLib.cs`)
+- `MiniCoreLib` (linked from `../osb.core/src/*.cs`)
   - Minimal runtime/type stubs required for freestanding NativeAOT; the single
     canonical copy lives in osb.core — never add a local one here.
 

@@ -25,6 +25,7 @@ internal static unsafe partial class NativeMethods
     [DllImport("osbnative")] public static extern ulong osb_sched_get_user_entry();
     [DllImport("osbnative")] public static extern void osb_poweroff(); // ACPI S5 (QEMU exits)
     [DllImport("osbnative")] public static extern void osb_reboot();   // 8042 reset pulse
+    [DllImport("osbnative")] public static extern ulong osb_read_cr2(); // Read CR2 (page-fault linear address)
     // ring-3 plumbing (boot.S)
     [DllImport("osbnative")] public static extern void osb_lgdt(byte* gdtr);
     [DllImport("osbnative")] public static extern void osb_ltr(ushort selector);
@@ -37,6 +38,9 @@ internal static unsafe partial class NativeMethods
     [DllImport("osbnative")] public static extern ulong osb_master_pd();
     [DllImport("osbnative")] public static extern int osb_pd_count();
     [DllImport("osbnative")] public static extern ulong osb_kernel_end();
+    // per-task TLS (M3.4.2): user FS base = thread pointer (boot.S)
+    [DllImport("osbnative")] public static extern void osb_set_fs(ulong fsBase);
+    [DllImport("osbnative")] public static extern ulong osb_get_fs();
     // user-blob bounds (user.S)
     [DllImport("osbnative")] public static extern ulong osb_userstub_begin();
     [DllImport("osbnative")] public static extern ulong osb_userstub_end();

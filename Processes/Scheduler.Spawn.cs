@@ -33,6 +33,7 @@ internal static unsafe partial class Scheduler
         SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), ProgramName(prog), Layout.KindUser,
             _tasks.sessionId[_current], _tasks.realUid[_current],
             _tasks.uid[_current], _tasks.gid[_current]);
+        InitTaskTls(slot, AddressSpace.Block);              // M3.4.2
         _tasks.arg[slot] = Layout.UserBase;                 // entry RIP in the private block
         _tasks.cr3[slot] = AddressSpace.Cr3;
         _tasks.ublock[slot] = AddressSpace.Block;
@@ -130,6 +131,7 @@ internal static unsafe partial class Scheduler
                 _tasks.sessionId[_current], _tasks.realUid[_current],
                 _tasks.uid[_current], _tasks.gid[_current]);
         SetNameChars(slot, nm, nl);
+        InitTaskTls(slot, AddressSpace.Block);              // M3.4.2
         _tasks.arg[slot] = Layout.UserBase + entryOff;   // user RIP in the private block
         _tasks.cr3[slot] = AddressSpace.Cr3;
         _tasks.ublock[slot] = AddressSpace.Block;

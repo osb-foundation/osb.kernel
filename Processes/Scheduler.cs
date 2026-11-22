@@ -54,6 +54,7 @@ internal static unsafe partial class Scheduler
         public fixed int exitCode[Count];
         public fixed ulong arg[Count];            // kind-specific (user entry RIP)
         public fixed ulong cr3[Count];            // address space (page table root)
+        public fixed ulong fsbase[Count];         // user FS base (thread pointer), 0 = kernel task
         public fixed ulong ublock[Count];         // 2 MiB user block (phys), 0 if none
         public fixed ulong ptphys[Count];         // 3 page-table frames (phys), 0 if none
         public fixed ulong round[Count];          // demo: rounds printed
@@ -108,6 +109,7 @@ internal static unsafe partial class Scheduler
             _tasks.exitCode[i] = 0;
             _tasks.sp[i] = 0;
             _tasks.cr3[i] = AddressSpace.Master;
+            _tasks.fsbase[i] = 0;
             _tasks.ublock[i] = 0;
             _tasks.ptphys[i] = 0;
             _tasks.sessionId[i] = 0;
@@ -209,6 +211,23 @@ t.NameLen = n;
         return slot;
     }
 
+    // Initialize the per-task TLS object at the top of the user block (M3.4.2).
+    // The linker-relaxed NativeAOT sequence is `mov %fs:0,%rax; lea -0xD0(%rax),%rax`,
+    // so FS base = TlsTop, the 8 bytes at TlsTop hold TlsTop (self-pointer), and
+    // the 208-byte tls_CurrentThread object lives at TlsTop-0xD0 with
+    // combined_limit at +0 and alloc_ptr at +8. `block` is the task's private
+    // 2 MiB physical block (the kernel is identity-mapped, so it doubles as VA).
+    private static void InitTaskTls(int slot, ulong block)
+    {
+        ulong top = Layout.UserTlsTop(slot);
+        byte* b = (byte*)block + (top - Layout.UserBase);
+        *(ulong*)b = top;                                   // [FS:0] = TP
+        byte* obj = b - Layout.TlsObjectSize;               // tls_CurrentThread
+        *(ulong*)obj = Layout.UserTlsHeapEnd;               // combined_limit
+        *(ulong*)(obj + 8) = Layout.UserTlsEnd;             // alloc_ptr (default heap)
+        _tasks.fsbase[slot] = top;
+    }
+
     // Force-terminate a slot: release its address space and free the slot. Used
     // by KILL and by Ctrl+C on a foreground job.
     public static void Release(int slot)
@@ -225,6 +244,7 @@ t.NameLen = n;
         _tasks.ublock[slot] = 0;
         _tasks.ptphys[slot] = 0;
         _tasks.cr3[slot] = AddressSpace.Master;
+        _tasks.fsbase[slot] = 0;
         _tasks.state[slot] = Layout.TaskFree;
         _tasks.kind[slot] = Layout.KindNone;
         _tasks.fg[slot] = 0;
@@ -297,6 +317,10 @@ t.NameLen = n;
         if (_tasks.kind[next] == Layout.KindUser)
             Gdt.SetKernelStack(KernelStackTop(next)); // TSS RSP0 for the next ring-3 task
         NativeMethods.osb_load_cr3(_tasks.cr3[next]);               // per-process address space
+        // M3.4.2: FS base is per-CPU and survives iretq/osb_switch unchanged, so
+        // every switch-in must establish the target task's thread pointer. Kernel
+        // tasks have fsbase 0 (the kernel itself never uses FS).
+        NativeMethods.osb_set_fs(_tasks.fsbase[next]);
         _current = next;
         fixed (ulong* sp = _tasks.sp)
             NativeMethods.osb_switch(sp + cur, sp + next);
@@ -335,6 +359,9 @@ t.NameLen = n;
     private static void UserTaskMain()
     {
         int slot = _current;
+        // M3.4.2: establish this task's thread pointer before the first iretq to
+        // ring 3. Preempt also sets it on every later switch-in.
+        NativeMethods.osb_set_fs(_tasks.fsbase[slot]);
         NativeMethods.osb_enter_user(_tasks.arg[slot], Layout.UserStackTop);
         for (;;) NativeMethods.halt();                              // not reached
     }

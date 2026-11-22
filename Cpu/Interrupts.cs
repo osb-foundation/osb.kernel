@@ -6,6 +6,7 @@
 //   17..21 = rip, cs, rflags, rsp, ss.
 
 using System.Runtime;
+using System.Runtime.InteropServices;
 using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
 using Osb.Kernel.Processes;
@@ -175,7 +176,7 @@ internal static unsafe class Interrupts
 
     // A ring-3 program faulted (bad instruction, page fault, ...). Report it and
     // terminate just that task; the kernel and other tasks keep running.
-    private static void UserFault(ulong vector, ulong* frame)
+private static void UserFault(ulong vector, ulong* frame)
     {
         Vga.PutChar('\n');
         Vga.Write("[kernel] user program fault at CPL3: vector=");
@@ -184,9 +185,37 @@ internal static unsafe class Interrupts
         Vga.WriteHex(frame[16]);
         Vga.Write(" RIP=");
         Vga.WriteHex(frame[17]);
+        Vga.Write(" CS=");
+        Vga.WriteHex(frame[18]);
+        Vga.Write(" RFLAGS=");
+        Vga.WriteHex(frame[19]);
+        Vga.Write(" RSP=");
+        Vga.WriteHex(frame[20]);
+        Vga.Write(" SS=");
+        Vga.WriteHex(frame[21]);
         Vga.PutChar('\n');
+        
+        ulong cr2 = NativeMethods.osb_read_cr2();
+        Vga.Write("[kernel] CR2=");
+        Vga.WriteHex(cr2);
+        Vga.PutChar('\n');
+        
+        // Print error code decode
+        ulong err = frame[16];
+        Vga.Write("[kernel] PF err: P=");
+        Vga.Write((err & 1) != 0 ? "1" : "0");
+        Vga.Write(" W/R=");
+        Vga.Write((err & 2) != 0 ? "1" : "0");
+        Vga.Write(" U/S=");
+        Vga.Write((err & 4) != 0 ? "1" : "0");
+        Vga.Write(" RSVD=");
+        Vga.Write((err & 8) != 0 ? "1" : "0");
+        Vga.Write(" I/D=");
+        Vga.Write((err & 16) != 0 ? "1" : "0");
+        Vga.PutChar('\n');
+        
         Vga.WriteLine("[kernel] terminating the user task; system continues.");
-        Scheduler.ExitCurrent(-1);         // fault code
+        Scheduler.ExitCurrent(-1);
     }
 
     private static void Panic(ulong vector, ulong* frame)

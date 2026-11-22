@@ -311,6 +311,13 @@ osb_poweroff:
     outw %ax, %dx
     ret
 
+/* Read CR2 (page-fault linear address). */
+.global osb_read_cr2
+.type osb_read_cr2, @function
+osb_read_cr2:
+    movq %cr2, %rax
+    ret
+
 /* Reset via the 8042 keyboard controller (pulse the reset line). */
 .global osb_reboot
 .type osb_reboot, @function
@@ -357,6 +364,30 @@ osb_reload_segments:
 .type osb_load_cr3, @function
 osb_load_cr3:
     movq %rdi, %cr3
+    ret
+
+/* M3.4.2: read/write the user FS base (IA32_FS_BASE, MSR 0xC0000100).
+ * Ring 0 only. FS base is the thread pointer the NativeAOT allocation
+ * helpers read with `mov %fs:0, %rax`; it must be set before a task
+ * enters ring 3 and re-established on every switch-in (the MSR is
+ * per-CPU and is not saved by iretq or by osb_switch). */
+.global osb_set_fs
+.type osb_set_fs, @function
+osb_set_fs:                         /* rdi = new FS base */
+    movl $0xC0000100, %ecx
+    movq %rdi, %rax
+    movq %rdi, %rdx
+    shrq $32, %rdx
+    wrmsr
+    ret
+
+.global osb_get_fs
+.type osb_get_fs, @function
+osb_get_fs:                         /* returns IA32_FS_BASE in rax */
+    movl $0xC0000100, %ecx
+    rdmsr
+    shlq $32, %rdx
+    orq  %rdx, %rax
     ret
 
 /* Addresses of the boot (kernel) page tables, so C# can copy the kernel's

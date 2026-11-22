@@ -43,6 +43,29 @@ internal static class Layout
     public const ulong UserLimit = 0x2200000;     // end of the U/S=1 2 MiB page
     public const ulong UserStackTop = 0x2080000;  // user stack grows down from here (512 KiB image area)
 
+    // Per-task TLS (M3.4.2). The NativeAOT helpers read FS:0 to get the thread
+    // pointer (TP) and then access the 208-byte `tls_CurrentThread` object at
+    // TP-0xD0. Each user task gets its own TP inside its private 2 MiB block:
+    // [TlsTop-0x1000, TlsTop) is reserved, with the TLS object in the last
+    // 0xD0 bytes and the self-pointer at TlsTop. Slots are 4 KiB apart, so a
+    // task can never see another task's TLS. The region is above the stack
+    // (0x2080000) and far below the key-event slot at UserLimit-16.
+    public const ulong UserTlsBase = 0x2100000;   // TlsTop of slot 1
+    public const int UserTlsStride = 0x1000;      // 4 KiB per task slot
+    public const int TlsObjectSize = 0xD0;        // 208-byte tls_CurrentThread
+    // End of the TLS area (8 slots). A helper that allocates without setting up
+    // its own heap gets [UserTlsEnd, UserLimit-16): above every TLS slot and
+    // below the 16-byte key-event slot at UserLimit-16.
+    public const ulong UserTlsEnd = UserTlsBase + 8UL * (ulong)UserTlsStride;
+    public const ulong UserTlsHeapEnd = UserLimit - 16;
+
+    // Thread pointer (FS base value) for a task slot. Slot 0 is the kernel
+    // console and never enters ring 3, so it has no TLS.
+    public static ulong UserTlsTop(int slot)
+    {
+        return UserTlsBase + (ulong)slot * (ulong)UserTlsStride;
+    }
+
     // Physical memory (frame allocator)
     public const ulong PhysFloorDefault = 0x200000;   // just above the kernel image
     public const ulong PhysTopDefault = 0x4000000;    // 64 MiB (QEMU -m 64M)

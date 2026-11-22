@@ -35,8 +35,26 @@ stage_ring3() {
             --targetarch x64 --targetos linux \
             -O -g --directpinvoke:osbnative \
             --map "$OBJ/$module.map"
+        # Optional per-program assembly probe (M3.4.2: TTlsProof/probe.S).
+        # Assembled and linked with the module so the program can expose
+        # FS-relative primitives that C# cannot emit.
+        local extra=""
+        local probe="$(dirname "$csproj")/probe.S"
+        if [[ -f "$probe" ]]; then
+            "$CC" -c -nostdlib -ffreestanding -o "$OBJ/${module}_probe.o" "$probe"
+            extra="$OBJ/${module}_probe.o"
+        fi
+        # Optional prebuilt helper objects shipped with a program (M3.4.3:
+        # TAlloc/AllocFast_real.o = the real NativeAOT allocation helpers,
+        # weakened so the test's fallback stubs win). Linked after the module
+        # and probe so their strong stubs override the weak references.
+        local helper
+        for helper in "$(dirname "$csproj")"/*.o; do
+            [[ -f "$helper" ]] || continue
+            extra="$extra $helper"
+        done
         ld.lld -T "$ROOT/../osbkt/user.ld" -o "$OBJ/$module.elf" \
-            "$OBJ/userspace.o" "$OBJ/$module.o" --no-relax \
+            "$OBJ/userspace.o" "$OBJ/$module.o" $extra --no-relax \
             --defsym="osb_startup=${module}__Module___StartupCodeMain"
         objcopy -O binary "$OBJ/$module.elf" "$OBJ/$module.bin"
         python3 "$ROOT/../osbkt/mkosbx.py" "$OBJ/$module.bin" "$OBJ/$module.EXE" 0 >/dev/null
@@ -50,7 +68,7 @@ stage_ring3() {
     # Ring-3 ABI test programs (run from the shell; see osb.shell/tests/progs).
     # Gated behind WITH_TESTS=1 so the default image ships only SHELL.EXE.
     if [[ "${WITH_TESTS:-0}" == "1" ]]; then
-        for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr TQuiet TId TSpin TLogout TSudo TEnv TMkdir TFileIO TFileManip TPath TMemGrow; do
+        for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr TQuiet TId TSpin TLogout TSudo TEnv TMkdir TFileIO TFileManip TPath TMemGrow TTlsProof TAlloc TOslangProof TReferenceLexer TStringLayout TStringBuilder; do
             compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
         done
         # 26-spawnerr EACCES proof: a valid OSBEXE with mode 0100644 (no x bit)

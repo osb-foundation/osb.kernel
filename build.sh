@@ -174,7 +174,7 @@ for i in $(seq 0 255); do
   if [[ "$ERRVECS" == *" $i "* ]]; then
     printf '    addq $8, %%rsp    /* discard CPU error code */\n' >> "$ISR"
   fi
-  printf '    pushq $0\n    pushq $%s\n    jmp isr_common\n\n' "$i" >> "$ISR"
+  printf '    pushq $0\n    pushq $%s\n    jmp isr_common\n\n' "$i" "$i" >> "$ISR"
 done
 printf '.global osb_isr_stubs\nosb_isr_stubs:\n' >> "$ISR"
 for i in $(seq 0 255); do
@@ -237,14 +237,12 @@ isr_common:
     movdqu 176(%rsp), %xmm11
     movdqu 160(%rsp), %xmm10
     movdqu 144(%rsp), %xmm9
-    movdqu 128(%rsp), %xmm8
-    movdqu 112(%rsp), %xmm7
-    movdqu  96(%rsp), %xmm6
-    movdqu  80(%rsp), %xmm5
-    movdqu  64(%rsp), %xmm4
-    movdqu  48(%rsp), %xmm3
-    movdqu  32(%rsp), %xmm2
-    movdqu  16(%rsp), %xmm1
+    movdqu 112(%rsp), %xmm6
+    movdqu  96(%rsp), %xmm5
+    movdqu  80(%rsp), %xmm4
+    movdqu  64(%rsp), %xmm3
+    movdqu  48(%rsp), %xmm2
+    movdqu  32(%rsp), %xmm1
     movdqu   0(%rsp), %xmm0
     addq $256, %rsp
     popq %r15
@@ -269,10 +267,11 @@ ASM
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/boot.o" "$ROOT/boot.S"
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/sched.o" "$ROOT/sched.S"
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/user.o" "$ROOT/user.S"
+"$CC" -c -nostdlib -ffreestanding -o "$OBJ/probe.o" "$ROOT/probe.S"
 
 echo "[4/6] Linking kernel.elf ..."
 ld.lld -T "$ROOT/linker.ld" -o "$OBJ/kernel.elf" \
-    "$OBJ/boot.o" "$OBJ/interrupts.o" "$OBJ/sched.o" "$OBJ/user.o" "$OBJ/OsbKernel.o" --no-relax
+    "$OBJ/boot.o" "$OBJ/interrupts.o" "$OBJ/sched.o" "$OBJ/user.o" "$OBJ/probe.o" "$OBJ/OsbKernel.o" --no-relax
 
 # ----- compile ring-3 programs (SHELL.EXE + tests) -----
 echo "[x/6] Compiling ring-3 programs ..."

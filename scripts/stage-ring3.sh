@@ -68,7 +68,7 @@ stage_ring3() {
     # Ring-3 ABI test programs (run from the shell; see osb.shell/tests/progs).
     # Gated behind WITH_TESTS=1 so the default image ships only SHELL.EXE.
     if [[ "${WITH_TESTS:-0}" == "1" ]]; then
-        for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr TQuiet TId TSpin TLogout TSudo TEnv TMkdir TFileIO TFileManip TPath TMemGrow TTlsProof TAlloc TOslangProof TReferenceLexer TStringLayout TStringBuilder; do
+        for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr TQuiet TId TSpin TLogout TSudo TEnv TMkdir TFileIO TFileManip TPath TMemGrow TTlsProof TAlloc TOslangProof TReferenceLexer TStringLayout TStringBuilder TMemProvider TEETypeLayout; do
             compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
         done
         # 26-spawnerr EACCES proof: a valid OSBEXE with mode 0100644 (no x bit)

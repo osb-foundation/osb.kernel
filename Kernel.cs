@@ -69,7 +69,7 @@ namespace Osb.Kernel
         // Hand control to the userspace shell. The boot program is
         // SHELL.EXE by default (H-B). Only WITH_TESTS=1 builds (BOOT_FROM_CONF)
         // honor A:\OSB\CONF/BOOT so golden cases can boot a test program.
-        char* boot = stackalloc char[256];
+char* boot = stackalloc char[256];
         int bootLen;
 #if BOOT_FROM_CONF
         bootLen = ReadBootProgram(boot, 256);

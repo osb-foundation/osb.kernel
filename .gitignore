@@ -31,6 +31,7 @@ Thumbs.db
 osb.iso
 osb-test*.iso
 iso/
+iso_dir/
 *.img
 
 # Test results

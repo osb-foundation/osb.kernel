@@ -61,24 +61,26 @@ internal static unsafe partial class Syscalls
         if (!SpawnExecutable(mode, Ext4.InodeGetUid(inode), Ext4.InodeGetGid(inode)))
         { frame[14] = unchecked((ulong)-3); return; }                          // EACCES
 
+        char* cargs = stackalloc char[128];
+        if (argsLen > 0)
+        {
+            for (int i = 0; i < (int)argsLen; i++) cargs[i] = (char)((byte*)argsPtr)[i];
+        }
+
+        var ctx = new Scheduler.SpawnContext
+        {
+            Args = cargs,
+            ArgsLen = (int)argsLen,
+            StdinH = stdinH,
+            StdoutH = stdoutH
+        };
+
         int pid;
-        SpawnResult r = Scheduler.SpawnFileInode(ino, cpath, (int)pathLen, Scheduler.Current, out pid);
+        SpawnResult r = Scheduler.SpawnFileInode(ino, cpath, (int)pathLen, Scheduler.Current, out pid, false, &ctx);
         if (r == SpawnResult.BadImage) { frame[14] = unchecked((ulong)-4); return; }   // ENOENT (no valid image)
         if (r == SpawnResult.OutOfMemory) { frame[14] = unchecked((ulong)-6); return; } // ENOMEM
         if (r == SpawnResult.NoSlot) { frame[14] = unchecked((ulong)-6); return; }     // ENOMEM
 
-        int slot;
-        if (Scheduler.TryFindPid(pid, out slot))
-        {
-            // Copy parent's file handles to child, set stdin/stdout handles.
-            Scheduler.PropagateHandles(slot, stdinH, stdoutH);
-            if (argsLen > 0)
-            {
-                char* cargs = stackalloc char[128];
-                for (int i = 0; i < (int)argsLen; i++) cargs[i] = (char)((byte*)argsPtr)[i];
-                Scheduler.SetArgs(slot, cargs, (int)argsLen);
-            }
-        }
         frame[14] = (ulong)pid;
     }
 

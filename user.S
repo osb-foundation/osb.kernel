@@ -1,8 +1,9 @@
 /* User-mode programs for the process milestone.
  *
  * These bytes are position-independent: each process gets a private 2 MiB
- * block mapped at 0x400000, and the kernel copies one program there and enters
- * it at CPL3. The system API mimics MS-DOS: INT 21h with AH = function.
+ * block mapped at Layout.UserBase (0x02000000), and the kernel copies one
+ * program there and enters it at CPL3. The system API mimics MS-DOS:
+ * INT 21h with AH = function.
  *
  *   AH=09h  print '$'-terminated string at RSI
  *   AH=30h  getpid -> EAX
@@ -15,19 +16,17 @@
 .code64
 
 /* --- HELLO: proves per-process memory isolation ------------------------- *
- * Writes its own pid into two slots (secret @0x500000, expected @0x510000),
- * prints a message, spins long enough for the scheduler to run another HELLO,
- * then checks that the secret still matches. If memory were shared, the other
- * process's store would clobber it. */
+ * Writes its own pid into two stack slots (secret at -8(%rsp), expected at
+ * -16(%rsp)), prints a message, spins long enough for the scheduler to run
+ * another HELLO, then checks that the secret still matches. If memory were
+ * shared, the other process's store would clobber it. */
 .global userstub_begin
 .global userstub_end
 userstub_begin:
     movl  $0x3000, %eax             /* AH=30h: getpid -> EAX */
     int   $0x21
-    movl  $0x500000, %ebx
-    movl  %eax, (%ebx)              /* secret   = pid */
-    movl  $0x510000, %ebx
-    movl  %eax, (%ebx)              /* expected = pid */
+    movl  %eax, -8(%rsp)            /* secret   = pid */
+    movl  %eax, -16(%rsp)           /* expected = pid */
 
     lea   userstub_msg(%rip), %rsi
     movb  $0x09, %ah
@@ -40,10 +39,9 @@ userstub_begin:
     decl  %edx
     jnz   5b
 
-    movl  $0x500000, %ebx
-    movl  (%ebx), %eax             /* read back the secret */
-    movl  $0x510000, %ebx
-    cmpl  (%ebx), %eax
+    movl  -8(%rsp), %eax           /* read back the secret */
+    movl  -16(%rsp), %ebx          /* expected */
+    cmpl  %ebx, %eax
     jne   2f
     lea   userstub_ok(%rip), %rsi
     jmp   3f

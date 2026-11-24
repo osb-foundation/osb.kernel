@@ -66,6 +66,33 @@ internal static class Layout
         return UserTlsBase + (ulong)slot * (ulong)UserTlsStride;
     }
 
+    // Dynamic user area (P3R.4, VM-009): broad uniform user virtual-address
+    // space shared by every process. Half-open range
+    // [DynamicUserBase, DynamicUserLimit) = [64 GiB, 128 GiB), backed by
+    // pml4[0] + pdpt[64..127], giving 64 GiB of virtual-address capacity.
+    //
+    // Corrected hexadecimal values (P3R.4 critical address correction):
+    //   64 GiB = 0x0000001000000000
+    //   128 GiB = 0x0000002000000000
+    // The earlier report's 0x0000000010000000 / 0x0000000020000000 were
+    // 256 MiB / 512 MiB respectively and must not be reused.
+    //
+    // Invariants (source-verified):
+    //   DynamicUserBase == 64 GiB            (aligned to 4 KiB and 1 GiB)
+    //   DynamicUserLimit == 128 GiB          (aligned to 4 KiB and 1 GiB)
+    //   DynamicUserSize == 64 GiB            (derived, single source of truth)
+    //   No overlap with legacy [0x02000000, 0x02200000)
+    //   Within canonical lower half (< 0x0000800000000000, 128 TiB)
+    //   PDPT entries 64..127 cover [64 GiB, 128 GiB)
+    public const ulong DynamicUserBase = 0x0000001000000000UL;  // 64 GiB
+    public const ulong DynamicUserLimit = 0x0000002000000000UL; // 128 GiB
+    // Derived from the boundaries (do not duplicate the numeric value).
+    public const ulong DynamicUserSize = DynamicUserLimit - DynamicUserBase; // 64 GiB
+    // Minimum guard separation between dynamic regions (VM-010): 4 KiB.
+    public const ulong DynamicUserMinGuard = 0x1000UL; // 4 KiB
+    // Dynamic-region mapping granularity (VM-005): 4 KiB, one frame.
+    public const int DynamicUserPageGranularity = FrameSize; // 4 KiB
+
     // Physical memory (frame allocator)
     public const ulong PhysFloorDefault = 0x200000;   // just above the kernel image
     public const ulong PhysTopDefault = 0x4000000;    // 64 MiB (QEMU -m 64M)

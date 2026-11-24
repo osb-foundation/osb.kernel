@@ -15,40 +15,86 @@ internal static unsafe partial class Scheduler
 {
     // Create a process running a built-in ring-3 program, in its own address
     // space. Returns Ok and the new pid; does not wait for the child.
+    //
+    // Sequence: resolve the internal uint Program ID via the explicit legacy
+    // translation layer, acquire a spawn lease, obtain a descriptor copy,
+    // validate the embedded source metadata, create the address space, then
+    // seed the scheduler slot and assign the PID. The lease is released on
+    // every exit path; failures leak neither leases, frames, address-space
+    // storage, nor scheduler slots.
     public static SpawnResult SpawnUser(int prog, int parentSlot, out int pid)
     {
         pid = -1;
+
+        // 1. Resolve the internal uint Program ID. prog is the legacy AL
+        //    value; validate the integer domain before any narrowing so an
+        //    out-of-range int cannot alias a valid legacy ID through a
+        //    (byte) truncation (e.g. 256->0/HELLO, 257->1/BAD, -1->255).
+        if (prog < 0 || prog > 255) return SpawnResult.NotFound;
+        uint internalId = ProgramRegistry.LegacyToInternal((byte)prog);
+        if (internalId == 0) return SpawnResult.NotFound;
+
+        // 2. Acquire a spawn lease before loading. A disabled program cannot
+        //    acquire a new lease.
+        SpawnLease lease;
+        if (!ProgramRegistry.TryAcquireSpawnLease(internalId, out lease)) return SpawnResult.NotFound;
+
+        // 3. Obtain a descriptor copy (no internal pointer escapes the Registry).
+        if (!ProgramRegistry.TryGetById(internalId, out var desc))
+        {
+            ProgramRegistry.ReleaseSpawnLease(lease);
+            return SpawnResult.NotFound;
+        }
+
+        // 4. Validate the embedded source metadata.
+        if (desc.ImageEnd <= desc.ImageStart)
+        {
+            ProgramRegistry.ReleaseSpawnLease(lease);
+            return SpawnResult.NotFound;
+        }
+        ulong size = desc.ImageEnd - desc.ImageStart;
+        if (size > (ulong)Layout.BlockFrames * Layout.FrameSize || desc.EntryOffset >= size)
+        {
+            ProgramRegistry.ReleaseSpawnLease(lease);
+            return SpawnResult.NotFound;
+        }
+
+        // 5/6. Allocate a scheduler slot (before AddressSpace so a NoSlot
+        //    refusal never leaks an address space), copy the environment,
+        //    create the address space via CommonLoader, seed the slot and assign the PID.
         int slot = AllocSlot();
-        if (slot < 0) return SpawnResult.NoSlot;
-        // Copy the parent's environment while the slot is still FREE, so the
-        // child can never be scheduled with an empty store (C1: copy-at-spawn).
+        if (slot < 0)
+        {
+            ProgramRegistry.ReleaseSpawnLease(lease);
+            return SpawnResult.NoSlot;
+        }
         Environment.CopyFrom(slot, _current);
-        ulong src, end;
-        if (prog == Layout.ProgBad) { src = NativeMethods.osb_userbad_begin(); end = NativeMethods.osb_userbad_end(); }
-        else if (prog == Layout.ProgSpawner) { src = NativeMethods.osb_spawner_begin(); end = NativeMethods.osb_spawner_end(); }
-        else { src = NativeMethods.osb_userstub_begin(); end = NativeMethods.osb_userstub_end(); }
 
-        if (!AddressSpace.Create(src, end)) return SpawnResult.OutOfMemory;
+        var exe = new ResolvedExecutable
+        {
+            Data = (byte*)desc.ImageStart,
+            Length = desc.ImageEnd - desc.ImageStart,
+            EntryOffset = desc.EntryOffset
+        };
+        if (!CommonLoader.TryLoad(exe))
+        {
+            // Reclaim the slot (no address space is attached to it yet;
+            // AddressSpace.Create frees its own frames on failure).
+            _tasks.state[slot] = Layout.TaskFree;
+            ProgramRegistry.ReleaseSpawnLease(lease);
+            return SpawnResult.OutOfMemory;
+        }
 
-        SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), ProgramName(prog), Layout.KindUser,
+        string name = ProgramRegistry.GetName(internalId) ?? "UNKNOWN";
+        SeedSlot(slot, NativeMethods.osb_sched_get_user_entry(), name, Layout.KindUser,
             _tasks.sessionId[_current], _tasks.realUid[_current],
             _tasks.uid[_current], _tasks.gid[_current]);
-        InitTaskTls(slot, AddressSpace.Block);              // M3.4.2
-        _tasks.arg[slot] = Layout.UserBase;                 // entry RIP in the private block
-        _tasks.cr3[slot] = AddressSpace.Cr3;
-        _tasks.ublock[slot] = AddressSpace.Block;
-        _tasks.ptphys[slot] = AddressSpace.PageTables;
-        _tasks.ppid[slot] = _tasks.pid[parentSlot];
-        pid = _tasks.pid[slot];
-        ConsoleInput.Flush();   // S2: no stale cooked input / Ctrl+C for the child
-        return SpawnResult.Ok;
-    }
+        PublishUserTask(slot, desc.EntryOffset, AddressSpace.Block,
+            AddressSpace.Cr3, AddressSpace.PageTables, parentSlot, out pid);
 
-    public static string ProgramName(int prog)
-    {
-        if (prog == Layout.ProgBad) return "BAD";
-        if (prog == Layout.ProgSpawner) return "SPAWNER";
-        return "HELLO";
+        // 7. Release the lease on every exit path.
+        ProgramRegistry.ReleaseSpawnLease(lease);
+        return SpawnResult.Ok;
     }
 
     // ---- external commands (A:\OSB\BIN\*.EXE) ----
@@ -75,14 +121,25 @@ internal static unsafe partial class Scheduler
         byte* inode = stackalloc byte[256];
         if (!Ext4.ReadInode(ino, inode)) return SpawnResult.NotFound;
         if (!Ext4.IsReg(Ext4.InodeGetMode(inode))) return SpawnResult.NotFound;
-        return SpawnFileInode(ino, path, pathLen, parentSlot, out pid, boot);
+        // No args/handles for boot spawn
+        return SpawnFileInode(ino, path, pathLen, parentSlot, out pid, boot, null);
+    }
+
+    // Spawn context for AH=6Ah: argument string and stdin/stdout handle indices.
+    internal unsafe struct SpawnContext
+    {
+        public char* Args;
+        public int ArgsLen;
+        public int StdinH;
+        public int StdoutH;
     }
 
     // Load and start an executable file whose inode is already resolved (the
     // 6Ah path resolves + checks type/exec first, then calls this so a refusal
     // leaves no task behind). `path`/`pathLen` are used only to derive the task
     // name. Same OSBX header contract as SpawnFile.
-    public static SpawnResult SpawnFileInode(uint ino, char* path, int pathLen, int parentSlot, out int pid, bool boot = false)
+    // If ctx is non-null, its args/handles are applied before task publication.
+    public static SpawnResult SpawnFileInode(uint ino, char* path, int pathLen, int parentSlot, out int pid, bool boot = false, SpawnContext* ctx = null)
     {
         pid = -1;
         byte* buf = ImgData();
@@ -98,16 +155,22 @@ internal static unsafe partial class Scheduler
         if (imgSize == 0 || 16 + imgSize > (uint)got) return SpawnResult.BadImage;
         if (entryOff >= imgSize) return SpawnResult.BadImage;
 
-        // AllocSlot BEFORE CreateBuf (P0.5): if there is no free slot we return
+        // AllocSlot BEFORE Create (P0.5): if there is no free slot we return
         // NoSlot without having allocated an address space, so its frames are
         // not leaked. (AllocSlot only reads state; it does not reserve, so a
-        // later CreateBuf failure leaves the slot free for reuse.)
+        // later creation failure leaves the slot free for reuse.)
         int slot = AllocSlot();
         if (slot < 0) return SpawnResult.NoSlot;
         // Copy the parent's environment while the slot is still FREE (C1).
         Environment.CopyFrom(slot, _current);
 
-        if (!AddressSpace.CreateBuf(buf + 16, (int)imgSize)) return SpawnResult.OutOfMemory;
+        var exe = new ResolvedExecutable
+        {
+            Data = buf + 16,
+            Length = imgSize,
+            EntryOffset = entryOff
+        };
+        if (!CommonLoader.TryLoad(exe)) return SpawnResult.OutOfMemory;
 
         // the task name is the file's base name, like the shell's "MEM.EXE"
         char* nm = stackalloc char[16];
@@ -131,14 +194,17 @@ internal static unsafe partial class Scheduler
                 _tasks.sessionId[_current], _tasks.realUid[_current],
                 _tasks.uid[_current], _tasks.gid[_current]);
         SetNameChars(slot, nm, nl);
-        InitTaskTls(slot, AddressSpace.Block);              // M3.4.2
-        _tasks.arg[slot] = Layout.UserBase + entryOff;   // user RIP in the private block
-        _tasks.cr3[slot] = AddressSpace.Cr3;
-        _tasks.ublock[slot] = AddressSpace.Block;
-        _tasks.ptphys[slot] = AddressSpace.PageTables;
-        _tasks.ppid[slot] = _tasks.pid[parentSlot];
-        pid = _tasks.pid[slot];
-        ConsoleInput.Flush();   // S2: no stale cooked input / Ctrl+C for the child
+
+        // Apply AH=6Ah context (args/handles) before publication if provided
+        if (ctx != null)
+        {
+            if (ctx->ArgsLen > 0 && ctx->Args != null)
+                SetArgs(slot, ctx->Args, ctx->ArgsLen);
+            PropagateHandles(slot, ctx->StdinH, ctx->StdoutH);
+        }
+
+        PublishUserTask(slot, entryOff, AddressSpace.Block,
+            AddressSpace.Cr3, AddressSpace.PageTables, parentSlot, out pid);
         return SpawnResult.Ok;
     }
 

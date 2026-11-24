@@ -37,6 +37,14 @@
     <Compile Include="../osb.core/src/*.cs" Link="osb.core/%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- Host-side test sources (tests/unit) must not be compiled into the
+       freestanding kernel: they link the registry sources directly and their
+       stub allocator/layout/native-symbol types would collide with the real
+       kernel types. -->
+  <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+  </ItemGroup>
+
   <!-- Fail with a clear message when the sibling repo is missing (A10). -->
   <Target Name="CheckSiblings" BeforeTargets="CoreCompile">
     <Error Condition="!Exists('$(MSBuildThisFileDirectory)../osb.core/src/MiniCoreLib.cs')"

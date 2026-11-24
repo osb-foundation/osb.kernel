@@ -110,9 +110,9 @@ _start:
     cmpl $32768, %ecx
     jne 3b
 
-    /* pd[2] = 0x400000..0x5FFFFF: mark U/S=1 so ring-3 code/data is reachable
-     * (kernel pages stay U=0 -> ring 3 cannot touch the kernel). */
-    movl $0x400087, %eax
+    /* pd[2] = 0x400000..0x5FFFFF: supervisor-only identity mapping
+     * (P|RW|PS, U/S=0). Ring 3 access is denied; Ring 0 retains read/write. */
+    movl $0x400083, %eax
     movl %eax, pd_pool+16
 
     /* enable PAE */

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Host-side unit tests for the freestanding Program Registry (M1.2).
+       Links the REAL kernel sources (EmbeddedRegistry.cs +
+       EmbeddedRegistry.Leases.cs) so the tests exercise the actual
+       implementation, not a mock. Only the kernel/allocator boundary
+       (Kernel.OsAlloc/OsFree, Layout, NativeMethods user-stub symbols) is
+       stubbed, because the Registry is freestanding kernel code that cannot
+       run under the host BCL/physical allocator directly. No QEMU, no
+       NativeAOT: runs in <1 s. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>OsbKernelUnit</AssemblyName>
+    <RootNamespace>Osb.Kernel.Unit</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);CS8603;CS8618;CS8625</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Processes/EmbeddedRegistry.cs" Link="Processes/EmbeddedRegistry.cs" />
+    <Compile Include="../../Processes/EmbeddedRegistry.Leases.cs" Link="Processes/EmbeddedRegistry.Leases.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="Stubs/Kernel.cs" />
+    <Compile Include="Stubs/Layout.cs" />
+    <Compile Include="Stubs/NativeMethods.cs" />
+    <Compile Include="RegistryTestReset.cs" />
+  </ItemGroup>
+
+</Project>

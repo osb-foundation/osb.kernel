@@ -19,6 +19,7 @@ using Osb.Kernel.Hardware;
 using Osb.Kernel.Memory;
 using Osb.Kernel.Processes;
 using Osb.Kernel.Shell;
+using Osb.Kernel.Storage;
 
 namespace Osb.Kernel
 {
@@ -42,6 +43,11 @@ namespace Osb.Kernel
         PhysicalMemory.Init();   // physical frame allocator (bitmap)
         Interrupts.Init();      // fill + load the IDT (exception + IRQ stubs)
         Scheduler.Init();       // console (slot 0) + kernel address space
+        if (!ProgramRegistry.Initialize())
+        {
+            Vga.WriteLine("Failed to initialize embedded program registry. Halting.");
+            while (true) { NativeMethods.hlt_cpu(); }
+        }
         Font.Init();            // embedded 8x8 font table
         Mouse.Init();           // PS/2 mouse on IRQ12
         Keyboard.Init();        // PS/2 keyboard on IRQ1
@@ -121,6 +127,18 @@ char* boot = stackalloc char[256];
         ulong phys = PhysicalMemory.Alloc(frames, Layout.FrameSize);
         if (phys == 0) return null;
         return (void*)phys;
+    }
+
+    // Release bytes previously allocated with OsAlloc, rounding up to whole
+    // frames and returning them to the physical frame allocator. A null
+    // pointer or zero byte count is a no-op. There is no managed heap; this
+    // is the release half of the kernel allocator used by dynamic kernel
+    // storage (e.g. the growable Program Registry descriptor array).
+    public static unsafe void OsFree(void* ptr, int bytes)
+    {
+        if (ptr == null || bytes <= 0) return;
+        int frames = (bytes + Layout.FrameSize - 1) / Layout.FrameSize;
+        PhysicalMemory.Free((ulong)ptr, frames);
     }
 
     // Reads A:\OSB\CONF\BOOT (first line, trailing spaces trimmed) into path.

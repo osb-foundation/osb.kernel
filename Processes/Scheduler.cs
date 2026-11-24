@@ -188,7 +188,6 @@ t.NameLen = n;
         _tasks.realUid[slot] = realUid;
         _tasks.uid[slot] = uid;
         _tasks.gid[slot] = gid;
-        _tasks.state[slot] = Layout.TaskReady;
         _tasks.kind[slot] = kind;
         _tasks.fg[slot] = 0;
         _tasks.exitCode[slot] = 0;
@@ -201,6 +200,13 @@ t.NameLen = n;
         SetName(slot, name);
     }
 
+    // Explicitly commit a prepared task: makes it runnable by setting state=TaskReady.
+    // This is the final publication store. All task fields must be initialized before calling.
+    private static void CommitTask(int slot)
+    {
+        _tasks.state[slot] = Layout.TaskReady;
+    }
+
     // Start a kernel job (the demo task). Returns its slot, or -1.
     public static int StartDemo()
     {
@@ -208,6 +214,7 @@ t.NameLen = n;
         if (slot < 0) return -1;
         SeedSlot(slot, NativeMethods.osb_sched_get_demo_entry(), "DEMO", Layout.KindDemo,
             0, 0, 0, 0);   // kernel task: session 0, root
+        CommitTask(slot);
         return slot;
     }
 
@@ -353,8 +360,8 @@ t.NameLen = n;
     }
 
     // Job body: ring-3 program. The scheduler has already loaded this process's
-    // CR3, so VA 0x400000 is its private block. Drops to CPL3 and never comes
-    // back (it exits via INT 21h or faults).
+    // CR3, so Layout.UserBase (0x02000000) is its private block. Drops to CPL3
+    // and never comes back (it exits via INT 21h or faults).
     [RuntimeExport("osb_user_task_main")]
     private static void UserTaskMain()
     {

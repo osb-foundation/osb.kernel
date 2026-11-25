@@ -71,6 +71,9 @@ stage_ring3() {
         for prog in TSpawn TExit TArgs TPrint TWait TPtr TSpawnErr TQuiet TId TSpin TLogout TSudo TEnv TMkdir TFileIO TFileManip TPath TMemGrow TTlsProof TAlloc TOslangProof TReferenceLexer TStringLayout TStringBuilder TMemProvider TEETypeLayout; do
             compile_rt3 "$prog" "$ROOT/../osb.shell/tests/progs/$prog/$prog.csproj"
         done
+        # O8.22 M1: THello is the minimal Ring 3 native executable proof
+        # (OSB Ring 3 Native Hello World, exit code 42), staged as HELLO.EXE.
+        compile_rt3 THello "$ROOT/../osb.shell/tests/progs/THello/THello.csproj" HELLO
         # 26-spawnerr EACCES proof: a valid OSBEXE with mode 0100644 (no x bit)
         # at /OSB/BIN/TNX.EXE. If SpawnPath were to create a task for it, TNX
         # (a copy of TPrint) would print; the EACCES check must refuse it first.

@@ -53,3 +53,7 @@ project.assets.json
 publish/
 out/
 dist/
+
+# Python bytecode
+__pycache__/
+*.pyc

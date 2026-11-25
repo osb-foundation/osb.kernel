@@ -1,0 +1,12 @@
+{
+  "schema": "osb.version.v1",
+  "component": "osb.kernel",
+  "version": "0.1.0",
+  "generation": 0,
+  "release": false,
+  "codename": null,
+  "codenameCandidates": ["Olorun", "Ptah"],
+  "codenameNote": "Generation 0 codename is pending an explicit final decision by the OSB project owner. Record the chosen codename here (and nowhere else) when the decision is made. Do not hardcode either candidate as definitive.",
+  "description": "Bootable OSB kernel (Multiboot2, freestanding NativeAOT, x86-64). Platform release version.",
+  "repository": "osb-foundation/osb.kernel"
+}

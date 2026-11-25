@@ -25,7 +25,11 @@
   <ItemGroup>
     <Compile Include="../../Processes/EmbeddedRegistry.cs" Link="Processes/EmbeddedRegistry.cs" />
     <Compile Include="../../Processes/EmbeddedRegistry.Leases.cs" Link="Processes/EmbeddedRegistry.Leases.cs" />
+    <Compile Include="../../Memory/PhysicalMemory.cs" Link="Memory/PhysicalMemory.cs" />
+    <Compile Include="../../Sync/SpinLock.cs" Link="Sync/SpinLock.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="SpinLockTests.cs" />
+    <Compile Include="AllocatorTests.cs" />
     <Compile Include="Stubs/Kernel.cs" />
     <Compile Include="Stubs/Layout.cs" />
     <Compile Include="Stubs/NativeMethods.cs" />

@@ -266,12 +266,13 @@ ASM
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/interrupts.o" "$ISR"
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/boot.o" "$ROOT/boot.S"
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/sched.o" "$ROOT/sched.S"
+"$CC" -c -nostdlib -ffreestanding -o "$OBJ/sync.o" "$ROOT/sync.S"
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/user.o" "$ROOT/user.S"
 "$CC" -c -nostdlib -ffreestanding -o "$OBJ/probe.o" "$ROOT/probe.S"
 
 echo "[4/6] Linking kernel.elf ..."
 ld.lld -T "$ROOT/linker.ld" -o "$OBJ/kernel.elf" \
-    "$OBJ/boot.o" "$OBJ/interrupts.o" "$OBJ/sched.o" "$OBJ/user.o" "$OBJ/probe.o" "$OBJ/OsbKernel.o" --no-relax
+    "$OBJ/boot.o" "$OBJ/interrupts.o" "$OBJ/sched.o" "$OBJ/sync.o" "$OBJ/user.o" "$OBJ/probe.o" "$OBJ/OsbKernel.o" --no-relax
 
 # ----- compile ring-3 programs (SHELL.EXE + tests) -----
 echo "[x/6] Compiling ring-3 programs ..."

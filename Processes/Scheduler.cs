@@ -43,6 +43,13 @@ internal static unsafe partial class Scheduler
     // (cap 129 returns 128 chars).
     public const int ArgsCap = 130;
 
+    // MEMGROW grants memory in 2 MiB steps up to a 16 MiB per-process limit, so
+    // a slot needs at most 16 MiB / 2 MiB = 8 distinct blocks. Each block's
+    // physical base is retained so it can be reclaimed on rollback and on
+    // process exit (O8.12 M1); the old code kept only a frame count and could
+    // never actually free the memory.
+    public const int MaxUserBlocks = 8;
+
     private unsafe struct TaskTable
     {
         public fixed ulong sp[Count];             // saved kernel SP (osb_switch)
@@ -73,6 +80,13 @@ internal static unsafe partial class Scheduler
         public fixed int stdoutH[Count];              // per-task stdout handle (-1 = VGA)
         public fixed int stdinH[Count];               // per-task stdin handle (-1 = console)
         public fixed int userFrames[Count];           // additional user frames (4 KiB each) beyond base 2 MiB
+        // MEMGROW block ownership (O8.12 M1): per slot, up to MaxUserBlocks
+        // (base phys, frame count) pairs plus the active block count. userFrames
+        // stays the running total (for the query/limit); these arrays are the
+        // ownership handles Free needs to reclaim the frames.
+        public fixed ulong userBlocks[Count * MaxUserBlocks];
+        public fixed int userBlockFrames[Count * MaxUserBlocks];
+        public fixed int userBlockCount[Count];
     }
 
     private unsafe struct StackPool { public fixed byte bytes[Count * Layout.StackSize]; }
@@ -119,6 +133,7 @@ internal static unsafe partial class Scheduler
             _tasks.stdoutH[i] = -1;
             _tasks.stdinH[i] = -1;
             _tasks.userFrames[i] = 0;
+            _tasks.userBlockCount[i] = 0;
         }
         // Slot 0 is the shell/console, running on the boot stack in the kernel
         // address space. Its saved SP is captured by the first osb_switch out.
@@ -241,13 +256,9 @@ t.NameLen = n;
     {
         if (slot <= Console) return;
         AddressSpace.Release(_tasks.ublock[slot], _tasks.ptphys[slot]);
-        // Free additional user frames
-        int frames = _tasks.userFrames[slot];
-        if (frames > 0)
-        {
-            PhysicalMemory.FreeFrames(frames);
-            _tasks.userFrames[slot] = 0;
-        }
+        // Reclaim additional user frames (MEMGROW blocks) by their recorded
+        // physical bases and reset the per-slot accounting (O8.12 M1).
+        ReleaseUserFrames(slot);
         _tasks.ublock[slot] = 0;
         _tasks.ptphys[slot] = 0;
         _tasks.cr3[slot] = AddressSpace.Master;

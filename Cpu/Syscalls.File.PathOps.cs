@@ -142,6 +142,11 @@ internal static unsafe partial class Syscalls
             return;
         }
         int n = Scheduler.GetArgs(Scheduler.Current, (byte*)rdi, (int)cap);
+        // DEBUG O8.15
+        Serial.PutChar('G'); Serial.PutChar('A'); Serial.PutChar(' ');
+        Serial.PutChar((char)('0' + Scheduler.Current));
+        Serial.PutChar(':'); Serial.PutChar((char)('0' + n / 10)); Serial.PutChar((char)('0' + n % 10));
+        Serial.PutChar('\r'); Serial.PutChar('\n');
         frame[14] = (ulong)n;
     }
 

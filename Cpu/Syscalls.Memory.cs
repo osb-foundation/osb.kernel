@@ -61,18 +61,21 @@ internal static unsafe partial class Syscalls
             return;
         }
 
-        // Check physical memory availability
-        if (!PhysicalMemory.TryAllocFrames((int)requestedFrames, out int _))
+        // Allocate the frames (one atomic claim). `phys` is the ownership handle
+        // used both for rollback below and for reclamation on process exit.
+        if (!PhysicalMemory.TryAllocFrames((int)requestedFrames, out ulong phys))
         {
             frame[14] = unchecked((ulong)-6); // ENOMEM
             return;
         }
 
-        // Add frames to process
-        if (!Scheduler.AddUserFrames(Scheduler.Current, (int)requestedFrames))
+        // Record ownership. If that fails, roll back exactly the block just
+        // acquired -- never a frame that was not acquired and never one owned by
+        // another allocation -- so the bitmap and accounting both return to their
+        // pre-call state (O8.12 M1).
+        if (!Scheduler.AddUserFrames(Scheduler.Current, (int)requestedFrames, phys))
         {
-            // Rollback physical allocation
-            PhysicalMemory.FreeFrames((int)requestedFrames);
+            PhysicalMemory.Free(phys, (int)requestedFrames);
             frame[14] = unchecked((ulong)-6); // ENOMEM
             return;
         }

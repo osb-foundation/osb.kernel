@@ -35,6 +35,15 @@ namespace Osb.Kernel
         Serial.Init();
         Vga.Clear();
 
+        // M0 SpinLock validation: exercise the real assembly primitives in ring 0
+        // at the IF=0 boot default (no IDT/timer yet, so the sti branch is not
+        // taken here — see SpinLock.SelfTest). Silent on success; halts on failure.
+        if (!Sync.SpinLock.SelfTest())
+        {
+            Vga.WriteLine("SPINLOCK SELFTEST FAILED. Halting.");
+            while (true) { NativeMethods.hlt_cpu(); }
+        }
+
         Interrupts.PicInit();   // remap 8259A (IRQ0-15 -> vectors 0x30-0x3F)
         Pit.Init();             // 8254 channel 0: square wave @ 100 Hz
         Rtc.Init();             // CMOS/RTC: 24h + binary + update-ended IRQ (~1 Hz)

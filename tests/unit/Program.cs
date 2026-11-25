@@ -316,6 +316,12 @@ internal static class Program
         Check(hRecRel, "H13: all recovered leases released");
         Check(ProgramRegistry.TryGetById(1, out var hD5) && hD5.SpawnLeases == 0, "H14: count back to zero after recovery");
 
+        // ==== M0 SpinLock primitive tests (O8.11) ====
+        failures += SpinLockTests.Run();
+
+        // ==== M1 physical frame allocator tests (O8.12) ====
+        failures += AllocatorTests.Run();
+
         // ==== Summary ====
         Console.WriteLine();
         if (failures == 0) { Console.WriteLine("ALL TESTS PASSED"); return 0; }

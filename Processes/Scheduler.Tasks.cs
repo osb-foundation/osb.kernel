@@ -113,6 +113,11 @@ internal static unsafe partial class Scheduler
         while (len > 0 && args[len - 1] == ' ') len--;
         if (len > ArgsCap - 1) len = ArgsCap - 1;
         for (int i = 0; i < len; i++) _tasks.args[o + i] = (byte)args[i];
+        // DEBUG O8.15
+        Serial.PutChar('['); Serial.PutChar((char)('0' + slot)); Serial.PutChar(']');
+        Serial.PutChar(':'); Serial.PutChar((char)('0' + len / 10)); Serial.PutChar((char)('0' + len % 10));
+        for (int i = 0; i < len && i < 16; i++) Serial.PutChar((char)_tasks.args[o + i]);
+        Serial.PutChar('\r'); Serial.PutChar('\n');
     }
 
     // Copies the current task's argument string out (0-terminated).

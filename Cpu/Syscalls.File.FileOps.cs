@@ -115,6 +115,13 @@ internal static unsafe partial class Syscalls
 
         byte* buf = stackalloc byte[4096];
         int got = Scheduler.FileRead(handle, buf, (int)cap);
+        // DEBUG O8.15: trace FileRead
+        {
+            Serial.PutChar('R'); Serial.PutChar('D'); Serial.PutChar(' ');
+            Serial.PutChar((char)('0' + handle / 10)); Serial.PutChar((char)('0' + handle % 10));
+            Serial.PutChar(':'); Serial.PutChar((char)('0' + got / 100)); Serial.PutChar((char)('0' + (got / 10) % 10)); Serial.PutChar((char)('0' + got % 10));
+            Serial.PutChar('\r'); Serial.PutChar('\n');
+        }
         if (got < 0) { frame[14] = unchecked((ulong)-1); return; }
         byte* o = (byte*)rsi;
         for (int k = 0; k < got; k++) o[k] = buf[k];

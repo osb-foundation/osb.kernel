@@ -4,6 +4,7 @@
 // carve their blocks from here.
 
 using Osb.Kernel.Hardware;
+using Osb.Kernel.Sync;
 
 namespace Osb.Kernel.Memory;
 
@@ -201,7 +202,22 @@ internal static unsafe class PhysicalMemory
     // index - a multiple of `align`, or a >4 KiB request (the 2 MiB user block)
     // would come back misaligned and break the 2 MiB (PS) page entry that maps
     // it.
+    //
+    // Serialized by the M0 SpinLock (O8.12 M1): the whole search-and-claim is
+    // one critical section so a concurrent mutation (timer-IRQ context never
+    // allocates, but syscalls and the scheduler do) cannot observe or corrupt a
+    // half-updated bitmap. The lock is taken/released in this wrapper; the body
+    // lives in AllocLocked so the lock is released on the single normal exit.
     public static ulong Alloc(int n, ulong align)
+    {
+        if (n <= 0) return 0;
+        SpinLock.Acquire(out ulong cookie);
+        ulong addr = AllocLocked(n, align);
+        SpinLock.Release(cookie);
+        return addr;
+    }
+
+    private static ulong AllocLocked(int n, ulong align)
     {
         ulong stride = align / Layout.FrameSize;
         if (stride < 1) stride = 1;
@@ -224,34 +240,69 @@ internal static unsafe class PhysicalMemory
     }
 
     // Try to allocate n frames (no alignment requirement beyond frame size).
-    // Returns true on success with the physical address of the first frame.
-    public static bool TryAllocFrames(int n, out int _)
+    // Returns true on success with the physical address of the first frame in
+    // `phys` (0 on failure). The address is the ownership handle the caller
+    // must retain to reclaim the frames with Free (O8.12 M1: MEMGROW needs the
+    // base to roll back and to free on process exit; the old `out int _`
+    // discarded it, which is why FreeFrames could never reclaim).
+    public static bool TryAllocFrames(int n, out ulong phys)
     {
-        ulong addr = Alloc(n, Layout.FrameSize);
-        _ = 0;
-        return addr != 0;
+        phys = Alloc(n, Layout.FrameSize);
+        return phys != 0;
     }
 
-    // Free n frames starting at the given physical address.
-    public static void FreeFrames(int n)
-    {
-        // This is a simplified version - in practice we'd need the base address.
-        // For MEMGROW, we free frames that were allocated via Alloc with no alignment.
-        // The frames are tracked per-process, so we free from the end of the process's range.
-        // This is a placeholder - the actual implementation would track the exact range.
-        // For now, just decrement used count (the bitmap is managed elsewhere).
-        if (n > 0 && _used >= (ulong)n) _used -= (ulong)n;
-    }
-
+    // Reclaim n frames starting at the given physical address. This is the real
+    // reclamation primitive (O8.12 M1): it clears the bitmap bits and adjusts
+    // accounting, so the frames return to the reusable pool. It replaces the
+    // old FreeFrames(int n), which only decremented _used and never touched the
+    // bitmap (a leak plus accounting drift).
+    //
+    // Safety (O8.12 M1 invariants):
+    //   - n <= 0 is a no-op.
+    //   - phys must be FrameSize-aligned; a misaligned address is rejected
+    //     rather than freeing the wrong frames.
+    //   - phys must lie inside [_floor, _top); out-of-range is rejected.
+    //   - Reserved frames (the pd[2] window and memory-map holes) are never
+    //     reclaimed, even if a caller passes their address.
+    //   - A frame already clear (double free, never allocated) is skipped, so a
+    //     duplicate reclamation is harmless.
+    // Serialized by the M0 SpinLock; the body is in FreeLocked so the lock is
+    // released on the single normal exit.
     public static void Free(ulong phys, int n)
     {
-        if (phys < _floor || phys >= _top) return;
+        SpinLock.Acquire(out ulong cookie);
+        FreeLocked(phys, n);
+        SpinLock.Release(cookie);
+    }
+
+    private static void FreeLocked(ulong phys, int n)
+    {
+        if (n <= 0) return;
+        if (phys % Layout.FrameSize != 0) return;            // misaligned: reject
+        if (phys < _floor || phys >= _top) return;           // outside managed range
         ulong i = (phys - _floor) / Layout.FrameSize;
         for (int j = 0; j < n; j++)
         {
             ulong k = i + (ulong)j;
             if (k >= _total) break;
+            if (IsReserved(_floor + k * Layout.FrameSize)) continue; // never reclaim reserved
             if (IsSet(k)) { Clear(k); if (_used > 0) _used--; }
         }
+    }
+
+    // True if phys falls in a permanently-reserved range: the fixed pd[2]
+    // window [ReservedLo, ReservedHi) or one of the memory-map holes recorded by
+    // Detect. Reserved frames are set in the bitmap by Reserve during Init and
+    // must never be handed out or reclaimed.
+    private static bool IsReserved(ulong phys)
+    {
+        if (phys >= Layout.ReservedLo && phys < Layout.ReservedHi) return true;
+        fixed (ulong* hlo = _holes.lo)
+        fixed (ulong* hhi = _holes.hi)
+        {
+            for (int i = 0; i < _holeCount; i++)
+                if (phys >= hlo[i] && phys < hhi[i]) return true;
+        }
+        return false;
     }
 }

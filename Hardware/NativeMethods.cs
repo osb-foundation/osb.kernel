@@ -18,6 +18,11 @@ internal static unsafe partial class NativeMethods
     [DllImport("osbnative")] public static extern ulong osb_get_stub_table();
     [DllImport("osbnative")] public static extern void sti();
     [DllImport("osbnative")] public static extern void cli();
+    // M0 synchronization primitives (sync.S): interrupt-state save/restore and
+    // the atomic compare-and-swap backing Osb.Kernel.Sync.SpinLock.
+    [DllImport("osbnative")] public static extern ulong osb_save_and_cli();
+    [DllImport("osbnative")] public static extern void osb_restore_interrupt_state(ulong rflags);
+    [DllImport("osbnative")] public static extern int osb_spinlock_cas(int* addr, int newVal, int oldVal);
     [DllImport("osbnative")] public static extern void halt();   // sti; hlt
     [DllImport("osbnative")] public static extern void hlt_cpu(); // bare hlt
     [DllImport("osbnative")] public static extern void osb_switch(ulong* saveSp, ulong* loadSp);

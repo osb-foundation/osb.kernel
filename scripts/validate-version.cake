@@ -8,10 +8,10 @@ using Newtonsoft.Json.Linq;
 
 var versionJson = Argument<string>("versionJson", null);
 if (string.IsNullOrWhiteSpace(versionJson)) { Error("missing --versionJson"); return 1; }
-if (!File.Exists(versionJson)) { Error($"version.json not found: {versionJson}"); return 1; }
+if (!System.IO.File.Exists(versionJson)) { Error($"version.json not found: {versionJson}"); return 1; }
 
 JObject data;
-try { data = JObject.Parse(File.ReadAllText(versionJson)); }
+try { data = JObject.Parse(System.IO.File.ReadAllText(versionJson)); }
 catch (Exception e) { Error($"invalid JSON: {e.Message}"); return 1; }
 
 var component = data["component"]?.Value<string>();

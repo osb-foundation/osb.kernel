@@ -11,7 +11,8 @@ cd "$ROOT"
 echo "=== OSB kernel CI (develop) ==="
 
 # 1. Validate the authoritative version metadata.
-python3 "$ROOT/scripts/validate-version.py" "$ROOT/version.json"
+dotnet tool install --global Cake.Tool >/dev/null 2>&1 || true
+dotnet cake "$ROOT/scripts/validate-version.cake" --versionJson="$ROOT/version.json"
 
 # 2. Build the freestanding kernel (managed C# + mini-CoreLib).
 echo "[1/4] dotnet build Osb.Kernel.csproj ..."

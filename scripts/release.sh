@@ -15,7 +15,8 @@ VERSION_JSON="$ROOT/version.json"
 # ---------------------------------------------------------------------------
 # 0. Validate the authoritative version metadata.
 # ---------------------------------------------------------------------------
-python3 "$ROOT/scripts/validate-version.py" "$VERSION_JSON"
+dotnet tool install --global Cake.Tool >/dev/null 2>&1 || true
+dotnet cake "$ROOT/scripts/validate-version.cake" --versionJson="$VERSION_JSON"
 
 VERSION=$(python3 -c "import json;print(json.load(open('$VERSION_JSON'))['version'])")
 CODENAME=$(python3 -c "import json;d=json.load(open('$VERSION_JSON'));print(d.get('codename') or '')")

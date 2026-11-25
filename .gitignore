@@ -57,3 +57,7 @@ dist/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Release artifacts (per-release, not committed)
+*.sha256
+release-manifest-*.json

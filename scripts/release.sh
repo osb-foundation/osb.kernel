@@ -89,6 +89,7 @@ python3 - "$VERSION" "$CODENAME" "$GENERATION" "$HEAD_COMMIT" "$TAG" "$MANIFEST"
 import json, sys, datetime, os, subprocess
 version, codename, generation, commit, tag, manifest = sys.argv[1:7]
 sib_roots = sys.argv[7:]
+built_at = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 components = {}
 for sib_root in sib_roots:
     name = os.path.basename(os.path.abspath(sib_root))
@@ -113,7 +114,7 @@ data = {
     "title": f"OSB {version} — {codename}" if codename else f"OSB {version} (generation {generation}, codename pending)",
     "commit": commit,
     "branch": "master",
-    "builtAt": datetime.datetime.utcnow().isoformat() + "Z",
+    "builtAt": built_at,
     "components": components,
     "artifacts": ["osb.iso", "osb.img", "osb.iso.sha256"],
 }

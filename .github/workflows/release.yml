@@ -16,6 +16,18 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate release origin (approved Git Flow)
+        # Publication is only ever allowed from master. This guard makes the
+        # branch restriction explicit at the workflow level so neither a push
+        # nor a manual workflow_dispatch from any other branch can reach the
+        # publication steps. release.sh re-checks this independently.
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/master" ]; then
+            echo "ERROR: release publication requires refs/heads/master (got ${{ github.ref }})" >&2
+            exit 1
+          fi
+          echo "Release origin OK: ${{ github.ref }}"
+
       - name: Checkout source
         uses: actions/checkout@v4
         with:

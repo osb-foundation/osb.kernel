@@ -1,8 +1,9 @@
 // OSB 1.1 (Olorun): deterministic version-metadata generator.
 //
 // Reads the five official component version.json files and emits a single
-// generated-metadata.json consumed by the shell's VER command. The output is
-// a deterministic, line-oriented artifact (one record per component):
+// line-oriented artifact consumed by the shell's VER command. The artifact is
+// written to /OSB/CONF/VERSION.dat on the ext4 boot image (one record per
+// component) and uses the format:
 //
 //     <component>:<version>:<generation>:<codename>
 //

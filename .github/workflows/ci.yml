@@ -17,32 +17,38 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
+      # Check out every OSB component side by side inside the workspace.
+      # Sibling checkouts use workspace-relative paths (never ../) and the
+      # ci.sh step runs with working-directory: osb.kernel so build.sh's
+      # ../<sibling> references resolve to the adjacent checkout dirs.
       - name: Checkout osb.kernel
         uses: actions/checkout@v4
+        with:
+          path: osb.kernel
 
       - name: Checkout osb.core
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osb.core
-          path: ../osb.core
+          path: osb.core
 
       - name: Checkout osbkt
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osbkt
-          path: ../osbkt
+          path: osbkt
 
       - name: Checkout osb.shell
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osb.shell
-          path: ../osb.shell
+          path: osb.shell
 
       - name: Checkout osb.oslang
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osb.oslang
-          path: ../osb.oslang
+          path: osb.oslang
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -56,3 +62,4 @@ jobs:
 
       - name: Run OSB kernel CI (version validation, build, unit tests, ELF + ABI check)
         run: ./scripts/ci.sh
+        working-directory: osb.kernel

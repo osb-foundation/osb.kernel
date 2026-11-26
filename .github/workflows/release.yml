@@ -28,37 +28,40 @@ jobs:
           fi
           echo "Release origin OK: ${{ github.ref }}"
 
+      # Check out every OSB component side by side inside the workspace.
+      # Sibling checkouts use workspace-relative paths (never ../) and the
+      # release.sh step runs with working-directory: osb.kernel.
       - name: Checkout osb.kernel
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          path: osb.kernel
 
       - name: Checkout osb.core
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osb.core
-          path: ../osb.core
+          path: osb.core
           fetch-depth: 0
 
       - name: Checkout osbkt
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osbkt
-          path: ../osbkt
+          path: osbkt
           fetch-depth: 0
 
       - name: Checkout osb.shell
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osb.shell
-          path: ../osb.shell
+          path: osb.shell
           fetch-depth: 0
 
       - name: Checkout osb.oslang
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osb.oslang
-          path: ../osb.oslang
+          path: osb.oslang
           fetch-depth: 0
 
       - name: Setup .NET SDK
@@ -73,5 +76,6 @@ jobs:
 
       - name: Publish OSB release (ISO, checksums, manifest, tag, GitHub Release)
         run: ./scripts/release.sh
+        working-directory: osb.kernel
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -28,9 +28,37 @@ jobs:
           fi
           echo "Release origin OK: ${{ github.ref }}"
 
-      - name: Checkout source
+      - name: Checkout osb.kernel
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
+
+      - name: Checkout osb.core
+        uses: actions/checkout@v4
+        with:
+          repository: osb-foundation/osb.core
+          path: ../osb.core
+          fetch-depth: 0
+
+      - name: Checkout osbkt
+        uses: actions/checkout@v4
+        with:
+          repository: osb-foundation/osbkt
+          path: ../osbkt
+          fetch-depth: 0
+
+      - name: Checkout osb.shell
+        uses: actions/checkout@v4
+        with:
+          repository: osb-foundation/osb.shell
+          path: ../osb.shell
+          fetch-depth: 0
+
+      - name: Checkout osb.oslang
+        uses: actions/checkout@v4
+        with:
+          repository: osb-foundation/osb.oslang
+          path: ../osb.oslang
           fetch-depth: 0
 
       - name: Setup .NET SDK

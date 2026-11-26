@@ -90,7 +90,7 @@ dotnet tool install --global Cake.Tool >/dev/null 2>&1 || true
 # 1. Validate the authoritative version metadata (Cake validator).
 # ===========================================================================
 log "== [1/7] Validating version.json =="
-dotnet cake "$ROOT/scripts/validate-version.cake" --versionJson="$VERSION_JSON" \
+dotnet cake "$ROOT/scripts/validate-version.cake" --versionJson="$VERSION_JSON" --expectCodename=Olorun \
     || die "version.json validation failed"
 
 VERSION="$(jq -r '.version' "$VERSION_JSON")"
@@ -137,26 +137,42 @@ resolve_sibling() {
         || die "could not resolve commit for '$comp'"
     [[ -n "$commit" ]] || die "empty commit for '$comp'"
 
+    # Verify clean working tree (no uncommitted changes)
+    if ! git -C "$dir" diff --quiet 2>/dev/null || ! git -C "$dir" diff --cached --quiet 2>/dev/null; then
+        die "'$comp' has uncommitted changes; release requires clean tree"
+    fi
+
+    # Verify branch: must be on release/<version> or master
+    local sib_branch
+    sib_branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
+        || die "could not resolve branch for '$comp'"
+    if [[ "$sib_branch" != "master" && "$sib_branch" != "release/$VERSION" ]]; then
+        die "'$comp' is on branch '$sib_branch', expected 'master' or 'release/$VERSION'"
+    fi
+
     local vj="$dir/version.json"
     [[ -f "$vj" ]] || die "'$comp' is missing version.json at $vj"
 
-    # Validate the sibling's metadata with the same Cake validator.
-    dotnet cake "$ROOT/scripts/validate-version.cake" --versionJson="$vj" \
-        || die "'$comp' version.json failed validation"
+    # Validate the sibling's metadata with the same Cake validator, requiring Olorun codename.
+    dotnet cake "$ROOT/scripts/validate-version.cake" --versionJson="$vj" --expectCodename=Olorun \
+        || die "'$comp' version.json failed validation (expectCodename=Olorun)"
 
-    local cver cgen ccode
+    local cver cgen ccode ccomp
     cver="$(jq -r '.version' "$vj")"
     cgen="$(jq -r '.generation' "$vj")"
     ccode="$(jq -r '.codename // ""' "$vj")"
+    ccomp="$(jq -r '.component // ""' "$vj")"
     [[ -n "$cver" && "$cver" != "null" ]] || die "'$comp' has no version"
-    [[ -n "$ccode" ]] || die "'$comp' has no codename (refusing 'unknown')"
+    [[ -n "$cgen" ]] || die "'$comp' has no generation"
+    [[ -n "$ccode" && "$ccode" != "unknown" && "$ccode" != "" ]] || die "'$comp' has no codename (refusing 'unknown')"
+    [[ -n "$ccomp" && "$ccomp" == "$comp" ]] || die "'$comp' component field '$ccomp' does not match expected '$comp'"
 
     SIB_COMMIT[$comp]="$commit"
     SIB_VERSION[$comp]="$cver"
     SIB_GENERATION[$comp]="$cgen"
     SIB_CODENAME[$comp]="$ccode"
     MANIFEST_REFS+=("$comp")
-    log "   $comp @ $commit  version=$cver generation=$cgen codename=$ccode"
+    log "   $comp @ $commit  version=$cver generation=$cgen codename=$ccode branch=$sib_branch"
 }
 
 for comp in "${COMPONENT_REPOS[@]}"; do

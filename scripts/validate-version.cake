@@ -47,7 +47,8 @@ if (!string.IsNullOrWhiteSpace(branch) && branch.StartsWith("release/")) {
 // Generation codename registry: generation 0 -> Olorun
 var registry = new System.Collections.Generic.Dictionary<int,string?> { {0,"Olorun"} };
 if (!generation.HasValue || !registry.ContainsKey(generation.Value)) { Error($"no codename registry entry for generation {generation}"); System.Environment.Exit(1); return; }
-if (codename != null && codename != registry[generation.Value]) { Error($"codename {codename} != registry {registry[generation.Value]}"); System.Environment.Exit(1); return; }
+if (codename == null) { Error($"missing required field 'codename' for generation {generation.Value}"); System.Environment.Exit(1); return; }
+if (codename != registry[generation.Value]) { Error($"codename {codename} != registry {registry[generation.Value]}"); System.Environment.Exit(1); return; }
 
 Information($"OK: {component} {version} (generation {generation}, codename={codename}, release={release})");
 return 0;

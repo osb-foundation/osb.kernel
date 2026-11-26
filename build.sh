@@ -73,7 +73,7 @@ if ! command -v dotnet >/dev/null 2>&1; then
     exit 1
 fi
 dotnet tool install --global Cake.Tool >/dev/null 2>&1 || true
-if ! dotnet cake "$ROOT/scripts/generate-metadata.cake" --root="$(cd "$ROOT/.." && pwd)" --output="$OBJ/fs/generated-metadata.json"; then
+if ! dotnet cake "$ROOT/scripts/generate-metadata.cake" --root="$(cd "$ROOT/.." && pwd)" --output="$OBJ/fs/generated-metadata.dat"; then
     echo "ERROR: version metadata generation failed." >&2
     exit 1
 fi
@@ -119,7 +119,7 @@ fi
 # image copy — see osb.shell/tests/golden/golden.sh patch_boot).
 printf '%s\n' "${OSB_BOOT_PROGRAM:-A:\\OSB\\BIN\\SHELL.EXE}" > "$OBJ/fs/boot.txt"
 
-{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; printf 'write "%s" /OSB/CONF/BOOT\n' "$OBJ/fs/boot.txt"; printf 'write "%s" /OSB/CONF/VERSION.JSON\n' "$OBJ/fs/generated-metadata.json"; } > "$OBJ/fs/populate2.txt"
+{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; printf 'write "%s" /OSB/CONF/BOOT\n' "$OBJ/fs/boot.txt"; printf 'write "%s" /OSB/CONF/VERSION.dat\n' "$OBJ/fs/generated-metadata.dat"; } > "$OBJ/fs/populate2.txt"
 dbg debugfs -w -f "$OBJ/fs/populate2.txt" "$OUT_IMG"
 # debugfs "write" does not update the inode/block bitmaps: reconcile them or the
 # kernel's allocators would hand out the seeded files' inodes (e.g. SUDOERS).

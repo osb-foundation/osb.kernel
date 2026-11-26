@@ -54,7 +54,7 @@ dbg() {
 # Sibling checkouts (A10): the split repos live side by side. osb.shell and
 # osbkt provide SHELL.EXE's sources/tooling; osb.core provides the canonical
 # MiniCoreLib. osb.xwin is optional (best-effort staging below).
-for sib in osb.shell osbkt osb.core; do
+for sib in osb.shell osbkt osb.core osb.oslang; do
     if [[ ! -d "$ROOT/../$sib" ]]; then
         echo "ERROR: sibling repo ../$sib not found next to osb.kernel." >&2
         echo "       Clone the OSB repos side by side (see README.md)." >&2
@@ -62,7 +62,21 @@ for sib in osb.shell osbkt osb.core; do
     fi
 done
 
-mkdir -p "$OBJ"
+# Generate version metadata from all component version.json files.
+# This metadata is consumed by the shell's VER command to display
+# accurate version information without hardcoded values. The generator is
+# strict: it fails (non-zero) on missing/invalid component metadata.
+mkdir -p "$OBJ/fs"
+echo "Generating version metadata ..."
+if ! command -v dotnet >/dev/null 2>&1; then
+    echo "ERROR: dotnet SDK required to generate version metadata." >&2
+    exit 1
+fi
+dotnet tool install --global Cake.Tool >/dev/null 2>&1 || true
+if ! dotnet cake "$ROOT/scripts/generate-metadata.cake" --root="$(cd "$ROOT/.." && pwd)" --output="$OBJ/fs/generated-metadata.json"; then
+    echo "ERROR: version metadata generation failed." >&2
+    exit 1
+fi
 
 # Generate the ext4 disk image (drive A:) if it does not exist or is older than
 # the population script markers (for now, always regenerate small dev image).
@@ -105,7 +119,7 @@ fi
 # image copy — see osb.shell/tests/golden/golden.sh patch_boot).
 printf '%s\n' "${OSB_BOOT_PROGRAM:-A:\\OSB\\BIN\\SHELL.EXE}" > "$OBJ/fs/boot.txt"
 
-{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; printf 'write "%s" /OSB/CONF/BOOT\n' "$OBJ/fs/boot.txt"; } > "$OBJ/fs/populate2.txt"
+{ cat "$OBJ/fs/populate.txt"; printf 'write "%s" /OSB/README.TXT\n' "$OBJ/fs/welcome.txt"; printf 'write "%s" /OSB/CONF/PASSWD\n' "$OBJ/fs/passwd.txt"; printf 'write "%s" /OSB/CONF/SUDOERS\n' "$OBJ/fs/sudoers.txt"; printf 'sif /OSB/TEMP mode 040777\n'; printf 'sif /OSB/CONF/PASSWD mode 0100600\n'; printf 'sif /OSB/CONF/SUDOERS mode 0100600\n'; printf 'write "%s" /OSB/CONF/BOOT\n' "$OBJ/fs/boot.txt"; printf 'write "%s" /OSB/CONF/VERSION.JSON\n' "$OBJ/fs/generated-metadata.json"; } > "$OBJ/fs/populate2.txt"
 dbg debugfs -w -f "$OBJ/fs/populate2.txt" "$OUT_IMG"
 # debugfs "write" does not update the inode/block bitmaps: reconcile them or the
 # kernel's allocators would hand out the seeded files' inodes (e.g. SUDOERS).

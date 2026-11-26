@@ -65,7 +65,7 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Ensure sibling checkouts side by side (build.sh requirement).
 # ---------------------------------------------------------------------------
-for sib in osb.shell osbkt osb.core; do
+for sib in osb.shell osbkt osb.core osb.oslang; do
     if [[ ! -d "$ROOT/../$sib" ]]; then
         echo "  cloning sibling $sib ..."
         git clone --depth 1 "https://github.com/osb-foundation/$sib.git" "$ROOT/../$sib"
@@ -86,49 +86,9 @@ sha256sum osb.iso osb.img > osb.iso.sha256
 
 MANIFEST="release-manifest-$VERSION.json"
 SIB_ROOTS="$ROOT $ROOT/../osb.shell $ROOT/../osbkt $ROOT/../osb.core $ROOT/../osb.oslang"
-python3 - "$VERSION" "$CODENAME" "$GENERATION" "$HEAD_COMMIT" "$TAG" "$MANIFEST" $SIB_ROOTS <<'PY'
-import json, sys, datetime, os, subprocess
-version, codename, generation, commit, tag, manifest = sys.argv[1:7]
-sib_roots = sys.argv[7:]
-built_at = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-components = {}
-for sib_root in sib_roots:
-    name = os.path.basename(os.path.abspath(sib_root))
-    vj = os.path.join(sib_root, "version.json")
-    ver = "unknown"
-    if os.path.exists(vj):
-        try:
-            ver = json.load(open(vj)).get("version", "unknown")
-        except Exception:
-            pass
-    try:
-        c = subprocess.check_output(["git", "-C", sib_root, "rev-parse", "HEAD"], text=True).strip()
-    except Exception:
-        c = "unknown"
-    components[name] = {"version": ver, "commit": c}
-data = {
-    "schema": "osb.release.v1",
-    "version": version,
-    "generation": generation,
-    "codename": codename,
-    "tag": tag,
-    "title": f"OSB {version} — {codename}" if codename else f"OSB {version} (generation {generation}, codename pending)",
-    "commit": commit,
-    "branch": "master",
-    "builtAt": built_at,
-    "components": components,
-    "artifacts": ["osb.iso", "osb.img", "osb.iso.sha256"],
-}
-with open(manifest, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-print(f"  manifest -> {manifest}")
-PY
+dotnet cake "$ROOT/scripts/generate-metadata.cake" --versionJson="$VERSION_JSON" -o "$ROOT/osb/generated-metadata.json"
 
-# ---------------------------------------------------------------------------
-# 6. Create + push the Git tag (unless it already targets HEAD).
-# ---------------------------------------------------------------------------
-if [[ "$TAG_ACTION" == "create" ]]; then
+if [[ -n "$REMOTE_TARGET" ]]; then
     echo "Creating tag $TAG ..."
     git tag -a "$TAG" -m "OSB $VERSION (generation $GENERATION)${CODENAME:+, codename $CODENAME}
 

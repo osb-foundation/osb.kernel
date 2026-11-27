@@ -270,7 +270,9 @@ internal static unsafe class Ext4
     public static unsafe byte DirEntryNameLen(byte* de) { return de[Layout.DirNameLen]; }
     public static unsafe byte DirEntryType(byte* de) { return de[Layout.DirType]; }
 
-    // Case-sensitive child lookup: name must match exactly.
+    // Case-insensitive child lookup: ASCII case is ignored; the first match
+    // wins (callers are responsible for ambiguity detection when multiple
+    // entries differ only in case).
     private static unsafe bool FindInDir(byte* dirIno, byte* name, int nameLen, out uint childIno, out byte childType)
     {
         childIno = 0;
@@ -297,7 +299,13 @@ internal static unsafe class Ext4
                 {
                     bool same = true;
                     for (int k = 0; k < nameLen; k++)
-                        if (de[Layout.DirName + k] != name[k]) { same = false; break; }
+                    {
+                        byte ca = de[Layout.DirName + k];
+                        byte cb = name[k];
+                        if (ca >= 0x41 && ca <= 0x5A) ca += 0x20; // ASCII uppercase -> lowercase
+                        if (cb >= 0x41 && cb <= 0x5A) cb += 0x20;
+                        if (ca != cb) { same = false; break; }
+                    }
                     if (same) { childIno = iino; childType = DirEntryType(de); return true; }
                 }
                 off += rlen;

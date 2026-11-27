@@ -84,7 +84,7 @@ namespace Osb.Kernel
         // Hand control to the userspace shell. The boot program is
         // SHELL.EXE by default (H-B). Only WITH_TESTS=1 builds (BOOT_FROM_CONF)
         // honor A:\OSB\CONF/BOOT so golden cases can boot a test program.
-char* boot = stackalloc char[256];
+        char* boot = stackalloc char[256];
         int bootLen;
 #if BOOT_FROM_CONF
         bootLen = ReadBootProgram(boot, 256);
@@ -110,7 +110,45 @@ char* boot = stackalloc char[256];
         // Q4: boot=true so the boot program is created with session 1 / uid -1
         // BEFORE it becomes READY (see Scheduler.Spawn.SpawnFileInode). It can
         // therefore never run for even one tick with the Console's uid 0.
-        var r = Scheduler.SpawnFile(boot, bootLen, Scheduler.Console, out pid, boot: true);
+// Check if boot program is OSLANG.EXE and pass HELLO.OSL as argument
+        bool isOslang = false;
+        const int OsLangLen = 10; // "OSLANG.EXE" = 10 chars
+        if (bootLen >= OsLangLen)
+        {
+            // Compare case-insensitive: check if path ends with "OSLANG.EXE"
+            int cmp = 0;
+            char* end = boot + bootLen - OsLangLen;
+            fixed (char* expected = "OSLANG.EXE")
+            {
+                while (cmp < OsLangLen)
+                {
+                    char a = end[cmp];
+                    char b = expected[cmp];
+                    // ASCII case-insensitive comparison
+                    if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+                    if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+                    if (a != b) break;
+                    cmp++;
+                }
+            }
+            isOslang = (cmp == OsLangLen);
+        }
+        SpawnResult r;
+        if (isOslang)
+        {
+            char* helloPath = stackalloc char[32];
+            fixed (char* def = "A:\\OSB\\BIN\\HELLO.OSL")
+            {
+                int len = 0;
+                while (def[len] != '\0') len++;
+                for (int i = 0; i < len; i++) helloPath[i] = def[i];
+                r = Scheduler.SpawnFileWithArgs(boot, bootLen, Scheduler.Console, out pid, helloPath, len);
+            }
+        }
+        else
+        {
+            r = Scheduler.SpawnFile(boot, bootLen, Scheduler.Console, out pid, boot: true);
+        }
         if (r != SpawnResult.Ok)
         {
             // If we cannot launch the boot program, halt the system.

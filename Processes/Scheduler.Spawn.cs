@@ -125,6 +125,27 @@ internal static unsafe partial class Scheduler
         return SpawnFileInode(ino, path, pathLen, parentSlot, out pid, boot, null);
     }
 
+    // Spawn a file with explicit argument string (for boot program).
+    public static SpawnResult SpawnFileWithArgs(char* path, int pathLen, int parentSlot, out int pid, char* args, int argsLen)
+    {
+        pid = -1;
+        if (!Ext4.Mount()) return SpawnResult.NotFound;
+        uint ino;
+        if (!Ext4.Resolve(path, pathLen, out ino)) return SpawnResult.NotFound;
+        byte* inode = stackalloc byte[256];
+        if (!Ext4.ReadInode(ino, inode)) return SpawnResult.NotFound;
+        if (!Ext4.IsReg(Ext4.InodeGetMode(inode))) return SpawnResult.NotFound;
+
+        var ctx = new SpawnContext
+        {
+            Args = args,
+            ArgsLen = argsLen,
+            StdinH = -1,
+            StdoutH = -1
+        };
+        return SpawnFileInode(ino, path, pathLen, parentSlot, out pid, boot: true, &ctx);
+    }
+
     // Spawn context for AH=6Ah: argument string and stdin/stdout handle indices.
     internal unsafe struct SpawnContext
     {

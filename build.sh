@@ -308,6 +308,33 @@ if [[ -d "$KISS_DIR" ]]; then
     done
 fi
 
+# ----- stage the OSLANG.EXE interpreter + Hello World (Card 1.6) -----
+# OSLANG.EXE is the freestanding NativeAOT Ring 3 interpreter built from
+# osb.oslang/engine/host/Host.Osb (OsbMain.cs + Engine.Core + osbkt + MiniCoreLib).
+# HELLO.OSL is the real .osl program it loads and executes. Building here keeps
+# the image reproducible from source (M7 OSLANG.EXE traceability).
+OSLANG_ROOT="$ROOT/../osb.oslang"
+if [[ -x "$OSLANG_ROOT/engine/host/Host.Osb/build-oslang.sh" ]]; then
+    echo "  building OSLANG.EXE (freestanding NativeAOT) ..."
+    if bash "$OSLANG_ROOT/engine/host/Host.Osb/build-oslang.sh" > "$OBJ/oslang_build.log" 2>&1; then
+        dbg debugfs -w -R "write \"$OSLANG_ROOT/engine/host/Host.Osb/OSLANG.EXE\" /OSB/BIN/OSLANG.EXE" "$OUT_IMG"
+        dbg debugfs -w -R "sif /OSB/BIN/OSLANG.EXE mode 0100755" "$OUT_IMG"
+        echo "  staged /OSB/BIN/OSLANG.EXE (mode 0100755)"
+    else
+        echo "ERROR: OSLANG.EXE build failed (see $OBJ/oslang_build.log)" >&2
+        exit 1
+    fi
+    if [[ -f "$OSLANG_ROOT/samples/hello/hello.osl" ]]; then
+        dbg debugfs -w -R "write \"$OSLANG_ROOT/samples/hello/hello.osl\" /OSB/BIN/HELLO.OSL" "$OUT_IMG"
+        echo "  staged /OSB/BIN/HELLO.OSL"
+    fi
+    if [[ -f "$OSLANG_ROOT/samples/divzero/divzero.osl" ]]; then
+        dbg debugfs -w -R "write \"$OSLANG_ROOT/samples/divzero/divzero.osl\" /OSB/BIN/DIVZERO.OSL" "$OUT_IMG"
+        echo "  staged /OSB/BIN/DIVZERO.OSL"
+    fi
+    run e2fsck -fy "$OUT_IMG"
+fi
+
 echo "[5/6] Building ISO ..."
 rm -rf "$ISO_DIR"
 mkdir -p "$ISO_DIR/boot/grub"

@@ -332,6 +332,10 @@ if [[ -x "$OSLANG_ROOT/engine/host/Host.Osb/build-oslang.sh" ]]; then
         dbg debugfs -w -R "write \"$OSLANG_ROOT/samples/divzero/divzero.osl\" /OSB/BIN/DIVZERO.OSL" "$OUT_IMG"
         echo "  staged /OSB/BIN/DIVZERO.OSL"
     fi
+    if [[ -f "$OSLANG_ROOT/samples/var-test/var-test.osl" ]]; then
+        dbg debugfs -w -R "write \"$OSLANG_ROOT/samples/var-test/var-test.osl\" /OSB/BIN/VAR-TEST.OSL" "$OUT_IMG"
+        echo "  staged /OSB/BIN/VAR-TEST.OSL"
+    fi
     run e2fsck -fy "$OUT_IMG"
 fi
 

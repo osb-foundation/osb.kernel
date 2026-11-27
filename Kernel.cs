@@ -97,7 +97,7 @@ namespace Osb.Kernel
             for (int i = 0; i < bootLen; i++) boot[i] = def[i];
         }
 #endif
-        if (bootLen <= 0)
+if (bootLen <= 0)
         {
             fixed (char* def = "A:\\OSB\\BIN\\SHELL.EXE")
             {
@@ -107,47 +107,61 @@ namespace Osb.Kernel
             }
         }
         int pid;
-        // Q4: boot=true so the boot program is created with session 1 / uid -1
-        // BEFORE it becomes READY (see Scheduler.Spawn.SpawnFileInode). It can
-        // therefore never run for even one tick with the Console's uid 0.
-// Check if boot program is OSLANG.EXE and pass HELLO.OSL as argument
-        bool isOslang = false;
-        const int OsLangLen = 10; // "OSLANG.EXE" = 10 chars
-        if (bootLen >= OsLangLen)
+        // Parse boot command line: split by whitespace, first token = program path
+        char* prog = stackalloc char[260];
+        char* args = stackalloc char[260];
+        int progLen = 0, argsLen = 0;
+        int idx = 0;
+        while (idx < bootLen && (boot[idx] == ' ' || boot[idx] == '\t')) idx++; // skip leading spaces
+        while (idx < bootLen && boot[idx] != ' ' && boot[idx] != '\t' && progLen < 259)
         {
-            // Compare case-insensitive: check if path ends with "OSLANG.EXE"
+            prog[progLen++] = boot[idx++];
+        }
+        while (idx < bootLen && (boot[idx] == ' ' || boot[idx] == '\t')) idx++; // skip spaces before args
+        while (idx < bootLen && argsLen < 259)
+        {
+            args[argsLen++] = boot[idx++];
+        }
+        // Check if program is OSLANG.EXE (case-insensitive match on "OSLANG.EXE")
+        bool isOslang = false;
+        const int OsLangLen = 10;
+        if (progLen >= OsLangLen)
+        {
             int cmp = 0;
-            char* end = boot + bootLen - OsLangLen;
-            fixed (char* expected = "OSLANG.EXE")
+            while (cmp < OsLangLen)
             {
-                while (cmp < OsLangLen)
-                {
-                    char a = end[cmp];
-                    char b = expected[cmp];
-                    // ASCII case-insensitive comparison
-                    if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
-                    if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
-                    if (a != b) break;
-                    cmp++;
-                }
+                char a = prog[progLen - OsLangLen + cmp];
+                char b = "OSLANG.EXE"[cmp];
+                if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+                if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+                if (a != b) break;
+                cmp++;
             }
             isOslang = (cmp == OsLangLen);
         }
         SpawnResult r;
         if (isOslang)
         {
-            char* helloPath = stackalloc char[32];
-            fixed (char* def = "A:\\OSB\\BIN\\HELLO.OSL")
+            // For OSLANG.EXE, use parsed args if present, otherwise default to HELLO.OSL
+            if (argsLen > 0)
             {
-                int len = 0;
-                while (def[len] != '\0') len++;
-                for (int i = 0; i < len; i++) helloPath[i] = def[i];
-                r = Scheduler.SpawnFileWithArgs(boot, bootLen, Scheduler.Console, out pid, helloPath, len);
+                r = Scheduler.SpawnFileWithArgs(prog, progLen, Scheduler.Console, out pid, args, argsLen);
+            }
+            else
+            {
+                char* helloPath = stackalloc char[32];
+                fixed (char* def = "A:\\OSB\\BIN\\HELLO.OSL")
+                {
+                    int len = 0;
+                    while (def[len] != '\0') len++;
+                    for (int j = 0; j < len; j++) helloPath[j] = def[j];
+                    r = Scheduler.SpawnFileWithArgs(prog, progLen, Scheduler.Console, out pid, helloPath, len);
+                }
             }
         }
         else
         {
-            r = Scheduler.SpawnFile(boot, bootLen, Scheduler.Console, out pid, boot: true);
+            r = Scheduler.SpawnFile(prog, progLen, Scheduler.Console, out pid, boot: true);
         }
         if (r != SpawnResult.Ok)
         {

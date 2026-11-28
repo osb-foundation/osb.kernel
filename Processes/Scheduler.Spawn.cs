@@ -68,6 +68,13 @@ internal static unsafe partial class Scheduler
             ProgramRegistry.ReleaseSpawnLease(lease);
             return SpawnResult.NoSlot;
         }
+        // Refuse (no truncation) if the next PID cannot be represented by the
+        // int spawn ABI. The slot is still free (AllocSlot does not reserve).
+        if (!SpawnPidFits())
+        {
+            ProgramRegistry.ReleaseSpawnLease(lease);
+            return SpawnResult.NoSlot;
+        }
         Environment.CopyFrom(slot, _current);
 
         var exe = new ResolvedExecutable
@@ -182,6 +189,9 @@ internal static unsafe partial class Scheduler
         // later creation failure leaves the slot free for reuse.)
         int slot = AllocSlot();
         if (slot < 0) return SpawnResult.NoSlot;
+        // Refuse (no truncation) if the next PID cannot be represented by the
+        // int spawn ABI. The slot is still free (AllocSlot does not reserve).
+        if (!SpawnPidFits()) return SpawnResult.NoSlot;
         // Copy the parent's environment while the slot is still FREE (C1).
         Environment.CopyFrom(slot, _current);
 

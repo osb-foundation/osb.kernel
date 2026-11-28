@@ -322,6 +322,9 @@ internal static class Program
         // ==== M1 physical frame allocator tests (O8.12) ====
         failures += AllocatorTests.Run();
 
+        // ==== Card 3: authoritative PID allocator tests ====
+        failures += PidAllocatorTests.Run();
+
         // ==== Summary ====
         Console.WriteLine();
         if (failures == 0) { Console.WriteLine("ALL TESTS PASSED"); return 0; }

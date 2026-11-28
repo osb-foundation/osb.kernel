@@ -23,11 +23,11 @@ internal enum SpawnResult
     BadImage         // not a valid OSBEXE image
 }
 
-// Read-only snapshot of one task slot, for the "ps" listing and job control.
-internal unsafe struct TaskInfo
-{
-    public int Pid;
-    public int State;
+    // Read-only snapshot of one task slot, for the "ps" listing and job control.
+    internal unsafe struct TaskInfo
+    {
+        public ulong Pid;            // authoritative 64-bit process identity
+        public int State;
     public ulong UserBlock;      // 2 MiB user block (phys), 0 for kernel tasks
     public byte* Name;           // ASCII, NUL-terminated
     public int NameLen;
@@ -53,8 +53,8 @@ internal static unsafe partial class Scheduler
     private unsafe struct TaskTable
     {
         public fixed ulong sp[Count];             // saved kernel SP (osb_switch)
-        public fixed int pid[Count];
-        public fixed int ppid[Count];
+        public fixed ulong pid[Count];            // authoritative 64-bit PID
+        public fixed ulong ppid[Count];           // parent PID (0 = none)
         public fixed int state[Count];
         public fixed int kind[Count];
         public fixed int fg[Count];               // 1 = foreground job
@@ -94,7 +94,7 @@ internal static unsafe partial class Scheduler
     private static TaskTable _tasks;
     private static StackPool _stacks;
     private static int _current;                  // slot currently on the CPU
-    private static int _nextPid;                  // next pid to hand out
+    private static PidAllocator _pids;            // authoritative PID source
     private static int _foreground;               // foreground job slot, or -1
 
     // Slot currently on the CPU.
@@ -146,7 +146,13 @@ internal static unsafe partial class Scheduler
         _tasks.gid[Console] = 0;
         SetName(Console, "CONSOLE");
         _current = Console;
-        _nextPid = 2;
+        // PID sequence resets on every boot (decision 4): a fresh allocator
+        // starts at 1. Slot 0 (console) is PID 1, so consume 1 from the
+        // allocator here; it then hands out 2,3,... to spawned processes.
+        _pids.Reset();
+        _pids.TryAllocate(out _);                       // reserve PID 1 for console
+        _tasks.pid[Console] = PidAllocator.FirstPid;   // 1
+        _tasks.ppid[Console] = 0;                       // no parent
         _foreground = -1;
     }
 
@@ -193,7 +199,10 @@ t.NameLen = n;
         fixed (byte* p = _stacks.bytes)
             sp = SeedTask(p + slot * Layout.StackSize, Layout.StackSize, entry);
         _tasks.sp[slot] = sp;
-        _tasks.pid[slot] = _nextPid++;
+        // PID is Kernel-owned and never chosen by ring 3 (decisions 6/7). The
+        // allocator is monotonic and non-reusing; on the (theoretical) exhausted
+        // path it yields 0, which the spawn paths detect and refuse.
+        _tasks.pid[slot] = _pids.TryAllocate(out ulong newPid) ? newPid : 0UL;
         _tasks.ppid[slot] = _tasks.pid[_current];
         // Q4: the session/uid fields are set by the caller BEFORE state=READY
         // (the last line), so a task can never be scheduled with stale
@@ -300,7 +309,7 @@ t.NameLen = n;
 
     // wait(pid): block until the process exits, then reap it. Returns the exit
     // code, or -1 if the pid is unknown / already gone.
-    public static int WaitFor(int pid)
+    public static int WaitFor(ulong pid)
     {
         int slot;
         if (!TryFindPid(pid, out slot)) return -1;

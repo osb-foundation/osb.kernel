@@ -19,7 +19,7 @@ internal static unsafe partial class Syscalls
     // v6 (slice 6): console (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR, 72h DATETIME);
     // WAIT interruptible (-7 EINTR); KILL/SETFG uid-gated. v5 (phase 3, slice 3):
     // environment (63h/64h). v4 (phase 1c): session identity (65h-69h).
-    public const int AbiVersion = 8;
+    public const int AbiVersion = 9;
 
     public static void Handle(ulong* frame)
     {

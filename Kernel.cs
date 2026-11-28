@@ -186,8 +186,8 @@ if (bootLen <= 0)
         }
         // The boot program is the session leader of a fresh session that starts
         // with no uid; it must LOGIN before doing anything privileged (1c, I3).
-        Scheduler.BeginFirstSession(pid);
-        Scheduler.WaitFor(pid);
+        Scheduler.BeginFirstSession((ulong)pid);
+        Scheduler.WaitFor((ulong)pid);
         // If the boot program exits, halt the system.
         Vga.WriteLine("Boot program exited. Halting.");
         while (true) { NativeMethods.hlt_cpu(); }

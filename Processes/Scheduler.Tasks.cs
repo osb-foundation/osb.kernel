@@ -64,8 +64,18 @@ internal static unsafe partial class Scheduler
         return true;
     }
 
-    // Find a live (ready) or zombie slot by pid; false if unknown.
-    public static bool TryFindPid(int pid, out int slot)
+    // The spawn ABI (80h/6Ah) returns the child PID as a signed int. The PID
+    // source is the 64-bit allocator; refuse a spawn (rather than truncate)
+    // when the next PID would not fit in int, so the int return is always
+    // lossless. In practice this is unreachable (8 slots, monotonic 1-based).
+    public static bool SpawnPidFits()
+    {
+        ulong p = _pids.Peek();
+        return p != 0 && p <= int.MaxValue;
+    }
+
+    // Find a live (ready) or zombie slot by 64-bit pid; false if unknown.
+    public static bool TryFindPid(ulong pid, out int slot)
     {
         for (int i = 0; i < Count; i++)
             if (_tasks.pid[i] == pid && (i == Console || _tasks.state[i] != Layout.TaskFree))

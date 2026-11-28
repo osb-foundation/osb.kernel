@@ -33,7 +33,7 @@ internal static unsafe partial class Scheduler
     // Called once at boot, after the boot program (the shell) is spawned. Turns
     // that task into the session leader of a fresh session that starts with NO
     // uid, so it must LOGIN before doing anything privileged.
-    public static void BeginFirstSession(int pid)
+    public static void BeginFirstSession(ulong pid)
     {
         if (!TryFindPid(pid, out int slot)) return;
         _leaderSlot = slot;

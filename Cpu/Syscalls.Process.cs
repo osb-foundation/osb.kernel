@@ -85,6 +85,7 @@ internal static unsafe partial class Syscalls
     }
 
     // 6Bh TASKLIST(out in RDI, cap in RSI) -> count
+    // Each record is 20 bytes: pid u64, state u32, name[8].
     private static void HandleTaskList(ulong* frame)
     {
         ulong rdi = frame[9];
@@ -92,7 +93,6 @@ internal static unsafe partial class Syscalls
 
         if (rdi == 0 || rsi == 0) { frame[14] = unchecked((ulong)-1); return; }
         if (!UserPtr(rdi, (int)rsi)) { frame[14] = unchecked((ulong)-1); return; }
-        int uid = Scheduler.CurrentUid();
         byte* outp = (byte*)rdi;
         int cap = (int)rsi;
         int n = 0;
@@ -102,25 +102,22 @@ internal static unsafe partial class Syscalls
             if (Scheduler.IsFree(slot)) continue;
             var ti = Scheduler.Get(slot);
 
-            if (off + 16 > cap) break;
-            // write pid (4), state (4), name (8 bytes)
-            outp[off] = (byte)(ti.Pid & 0xFF);
-            outp[off+1] = (byte)((ti.Pid>>8)&0xFF);
-            outp[off+2] = (byte)((ti.Pid>>16)&0xFF);
-            outp[off+3] = (byte)((ti.Pid>>24)&0xFF);
-            outp[off+4] = (byte)(ti.State & 0xFF);
-            outp[off+5]=outp[off+6]=outp[off+7]=0;
-            for (int k=0;k<8;k++) outp[off+8+k]= (k < ti.NameLen && ti.Name!=null ? ti.Name[k] : (byte)0);
-            off += 16; n++;
+            if (off + 20 > cap) break;
+            // pid (u64) at +0, state (u32) at +8, name[8] at +12
+            ulong pid = ti.Pid;
+            for (int b = 0; b < 8; b++) outp[off + b] = (byte)(pid >> (b * 8));
+            outp[off+8] = (byte)(ti.State & 0xFF);
+            outp[off+9]=outp[off+10]=outp[off+11]=0;
+            for (int k=0;k<8;k++) outp[off+12+k]= (k < ti.NameLen && ti.Name!=null ? ti.Name[k] : (byte)0);
+            off += 20; n++;
         }
         frame[14] = unchecked((ulong)n);
     }
 
-    // 6Ch KILL(pid in RDI) -> 0 ok / -4 not found / -3 denied
+    // 6Ch KILL(pid in RDI, u64) -> 0 ok / -4 not found / -3 denied
     private static void HandleKill(ulong* frame)
     {
-        ulong rdi = frame[9];
-        int pid = (int)rdi;
+        ulong pid = frame[9];
         int slot;
         if (!Scheduler.TryFindPid(pid, out slot)) { frame[14] = unchecked((ulong)-4); return; }
         if (slot == 0) { frame[14] = unchecked((ulong)-3); return; } // console
@@ -131,11 +128,10 @@ internal static unsafe partial class Syscalls
         frame[14] = 0;
     }
 
-    // 6Dh SETFG(pid in RDI) -> 0 ok / -4 not found / -3 denied
+    // 6Dh SETFG(pid in RDI, u64) -> 0 ok / -4 not found / -3 denied
     private static void HandleSetFg(ulong* frame)
     {
-        ulong rdi = frame[9];
-        int pid = (int)rdi;
+        ulong pid = frame[9];
         int slot;
         if (!Scheduler.TryFindPid(pid, out slot)) { frame[14] = unchecked((ulong)-4); return; }
         int uid = Scheduler.CurrentUid();
@@ -155,11 +151,11 @@ internal static unsafe partial class Syscalls
         frame[14] = unchecked((ulong)(r == SpawnResult.Ok ? pid : -1));
     }
 
-    // 81h WAIT(pid in RSI): blocks until the child exits
+    // 81h WAIT(pid in RSI, u64): blocks until the child exits
     private static void HandleWait(ulong* frame)
     {
         ulong rsi = frame[10];
-        frame[14] = unchecked((ulong)Scheduler.WaitFor((int)rsi));
+        frame[14] = unchecked((ulong)Scheduler.WaitFor(rsi));
     }
 
     // 82h GETABI: ABI version in AX

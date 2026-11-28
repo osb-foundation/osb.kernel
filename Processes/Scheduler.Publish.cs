@@ -23,7 +23,8 @@ internal static unsafe partial class Scheduler
         _tasks.ublock[slot] = block;
         _tasks.ptphys[slot] = ptphys;
         _tasks.ppid[slot] = _tasks.pid[parentSlot];
-        pid = _tasks.pid[slot];
+        // Lossless: SpawnPidFits() guaranteed the PID fits the int spawn ABI.
+        pid = (int)_tasks.pid[slot];
         CommitTask(slot);
         ConsoleInput.Flush();
     }

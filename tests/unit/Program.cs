@@ -325,6 +325,9 @@ internal static class Program
         // ==== Card 3: authoritative PID allocator tests ====
         failures += PidAllocatorTests.Run();
 
+        // ==== Card 3.1: Kernel IPC core tests ====
+        failures += IpcTests.Run();
+
         // ==== Summary ====
         Console.WriteLine();
         if (failures == 0) { Console.WriteLine("ALL TESTS PASSED"); return 0; }

@@ -25,6 +25,7 @@
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <DefineConstants>$(DefineConstants);TARGET_64BIT</DefineConstants>
     <DefineConstants Condition="'$(BootFromConf)' == 'true'">$(DefineConstants);BOOT_FROM_CONF</DefineConstants>
+    <DefineConstants Condition="'$(EnableDiagnostics)' == 'true'">$(DefineConstants);DIAGNOSTICS</DefineConstants>
   </PropertyGroup>
 
   <!-- mini-CoreLib sources: link the canonical copies from osb.core

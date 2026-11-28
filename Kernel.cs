@@ -88,6 +88,12 @@ namespace Osb.Kernel
         int bootLen;
 #if BOOT_FROM_CONF
         bootLen = ReadBootProgram(boot, 256);
+#if DIAGNOSTICS
+        Vga.Write("BOOT_FROM_CONF: ReadBootProgram returned bootLen="); Vga.WriteDec((ulong)bootLen); Vga.WriteLine("");
+        Vga.Write("BOOT_FROM_CONF: buffer[0..5]=");
+        for (int i = 0; i < 6 && i < bootLen; i++) { Vga.Write(boot[i].ToString()); Vga.Write(" "); }
+        Vga.WriteLine("");
+#endif
 #else
         // Default build: always SHELL.EXE, regardless of any CONF/BOOT file.
         fixed (char* def = "A:\\OSB\\BIN\\SHELL.EXE")
@@ -96,6 +102,9 @@ namespace Osb.Kernel
             while (def[bootLen] != '\0') bootLen++;
             for (int i = 0; i < bootLen; i++) boot[i] = def[i];
         }
+#if DIAGNOSTICS
+        Vga.WriteLine("NO_BOOT_FROM_CONF: using default SHELL.EXE bootLen="); Vga.WriteDec((ulong)bootLen); Vga.WriteLine("");
+#endif
 #endif
 if (bootLen <= 0)
         {
@@ -107,6 +116,12 @@ if (bootLen <= 0)
             }
         }
         int pid;
+#if DIAGNOSTICS
+        // DEBUG: Print boot program path
+        Vga.Write("Boot program: ");
+        for (int i = 0; i < bootLen; i++) Vga.Write(boot[i].ToString());
+        Vga.WriteLine("");
+#endif
         // Parse boot command line: split by whitespace, first token = program path
         char* prog = stackalloc char[260];
         char* args = stackalloc char[260];
@@ -206,19 +221,46 @@ if (bootLen <= 0)
     // Returns the length, or 0 when the file is missing/empty/unreadable.
     private static int ReadBootProgram(char* path, int cap)
     {
+#if DIAGNOSTICS
+        Vga.WriteLine("ReadBootProgram: Mount...");
+        if (!Storage.Ext4.Mount()) { Vga.WriteLine("ReadBootProgram: Mount FAILED"); return 0; }
+        Vga.WriteLine("ReadBootProgram: Mount OK");
+#else
         if (!Storage.Ext4.Mount()) return 0;
+#endif
         uint ino;
         fixed (char* boot = "A:\\OSB\\CONF\\BOOT")
         {
             int bl = 0; while (boot[bl] != '\0') bl++;
+#if DIAGNOSTICS
+            Vga.Write("ReadBootProgram: Resolve... ");
+            if (!Storage.Ext4.Resolve(boot, bl, out ino)) { Vga.WriteLine("FAILED"); return 0; }
+            Vga.WriteLine("OK");
+#else
             if (!Storage.Ext4.Resolve(boot, bl, out ino)) return 0;
+#endif
         }
         byte* inode = stackalloc byte[256];
+#if DIAGNOSTICS
+        Vga.Write("ReadBootProgram: ReadInode... ");
+        if (!Storage.Ext4.ReadInode(ino, inode)) { Vga.WriteLine("FAILED"); return 0; }
+        Vga.WriteLine("OK");
+        Vga.Write("ReadBootProgram: IsReg... ");
+        if (!Storage.Ext4.IsReg(Storage.Ext4.InodeGetMode(inode))) { Vga.WriteLine("FAILED"); return 0; }
+        Vga.WriteLine("OK");
+#else
         if (!Storage.Ext4.ReadInode(ino, inode)) return 0;
         if (!Storage.Ext4.IsReg(Storage.Ext4.InodeGetMode(inode))) return 0;
+#endif
         byte* buf = stackalloc byte[256];
         int got;
+#if DIAGNOSTICS
+        Vga.Write("ReadBootProgram: ReadFileAll... ino="); Vga.WriteDec((ulong)ino); Vga.WriteLine("");
+        if (!Storage.Ext4.ReadFileAll(ino, buf, 256, out got)) { Vga.WriteLine("FAILED"); return 0; }
+        Vga.Write("ReadBootProgram: ReadFileAll returned, got="); Vga.WriteDec((ulong)got); Vga.WriteLine("");
+#else
         if (!Storage.Ext4.ReadFileAll(ino, buf, 256, out got)) return 0;
+#endif
         int n = 0;
         for (int i = 0; i < got && n < cap - 1; i++)
         {
@@ -227,6 +269,9 @@ if (bootLen <= 0)
             path[n++] = (char)b;
         }
         while (n > 0 && path[n - 1] == ' ') n--;              // trim trailing spaces
+#if DIAGNOSTICS
+        Vga.Write("ReadBootProgram: returning n="); Vga.WriteDec((ulong)n); Vga.WriteLine("");
+#endif
         return n;
     }
 }

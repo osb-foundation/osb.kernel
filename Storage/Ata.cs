@@ -19,6 +19,9 @@ internal static unsafe class Ata
     {
         for (int i = 0; i < MaxTimeout; i++)
             if ((NativeMethods.inb(Layout.AtaPrimaryStatus) & Layout.AtaStatusBusy) == 0) return true;
+#if DIAGNOSTICS
+        Vga.WriteLine("Ata.WaitBusy: TIMEOUT");
+#endif
         return false;
     }
 
@@ -27,6 +30,9 @@ internal static unsafe class Ata
     {
         for (int i = 0; i < MaxTimeout; i++)
             if ((NativeMethods.inb(Layout.AtaPrimaryStatus) & Layout.AtaStatusDrq) != 0) return true;
+#if DIAGNOSTICS
+        Vga.WriteLine("Ata.WaitDrq: TIMEOUT");
+#endif
         return false;
     }
 
@@ -34,20 +40,42 @@ internal static unsafe class Ata
     // data phase to open.
     private static bool Select(ulong lba, byte command)
     {
+#if DIAGNOSTICS
+        Vga.Write("Ata.Select: WaitBusy... ");
+        if (!WaitBusy()) { Vga.WriteLine("FAILED"); return false; }
+        Vga.WriteLine("OK");
+#else
         if (!WaitBusy()) return false;
+#endif
         NativeMethods.outb(Layout.AtaPrimaryDriveHead, (byte)(0xE0 | ((lba >> 24) & 0x0F)));
         NativeMethods.outb(Layout.AtaPrimarySecCount, 1);
         NativeMethods.outb(Layout.AtaPrimaryLbaLow, (byte)(lba & 0xFF));
         NativeMethods.outb(Layout.AtaPrimaryLbaMid, (byte)((lba >> 8) & 0xFF));
         NativeMethods.outb(Layout.AtaPrimaryLbaHigh, (byte)((lba >> 16) & 0xFF));
         NativeMethods.outb(Layout.AtaPrimaryCommand, command);
-        return WaitBusy();
+#if DIAGNOSTICS
+        Vga.Write("Ata.Select: WaitBusy after cmd... ");
+        if (!WaitBusy()) { Vga.WriteLine("FAILED"); return false; }
+        Vga.WriteLine("OK");
+#else
+        if (!WaitBusy()) return false;
+#endif
+        return true;
     }
 
     public static bool ReadSector(ulong lba, byte* buffer)
     {
+#if DIAGNOSTICS
+        Vga.Write("Ata.ReadSector: Select... ");
+        if (!Select(lba, Layout.AtaCmdReadSectors)) { Vga.WriteLine("FAILED"); return false; }
+        Vga.WriteLine("OK");
+        Vga.Write("Ata.ReadSector: WaitDrq... ");
+        if (!WaitDrq()) { Vga.WriteLine("FAILED"); return false; }
+        Vga.WriteLine("OK");
+#else
         if (!Select(lba, Layout.AtaCmdReadSectors)) return false;
         if (!WaitDrq()) return false;
+#endif
         NativeMethods.insw(Layout.AtaPrimaryData, (ushort*)buffer, SectorWords);
         return true;
     }

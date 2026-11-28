@@ -38,17 +38,44 @@ internal static unsafe class Ext4
     {
         if (_mounted) return true;
         byte* sbuf = stackalloc byte[BlockSize];
+#if DIAGNOSTICS
+        Vga.Write("Ext4.Mount: ReadBlock(0)... ");
+        if (!ReadBlock(0UL, sbuf)) { Vga.WriteLine("FAILED"); return false; }
+        Vga.WriteLine("OK");
+        byte* sb = sbuf + 1024;
+        uint magic = SbMagic(sb);
+        Vga.Write("Ext4.Mount: magic=");
+        Vga.WriteHex(magic);
+        Vga.WriteLine("");
+        Vga.Write("Ext4.Mount: raw bytes at 1024: ");
+        for (int i = 0; i < 4; i++)
+        {
+            byte b = sb[i];
+            int d1 = (b >> 4) & 0xF;
+            int d2 = b & 0xF;
+            Vga.PutChar((char)(d1 < 10 ? '0' + d1 : 'A' + d1 - 10));
+            Vga.PutChar((char)(d2 < 10 ? '0' + d2 : 'A' + d2 - 10));
+            Vga.PutChar(' ');
+        }
+        Vga.WriteLine("");
+        if (magic != 0xEF53) { Vga.WriteLine("Ext4.Mount: bad magic"); return false; }
+        byte* gdt = stackalloc byte[BlockSize];
+        Vga.Write("Ext4.Mount: ReadBlock(1)... ");
+        if (!ReadBlock(1UL, gdt)) { Vga.WriteLine("FAILED"); return false; }
+        Vga.WriteLine("OK");
+#else
         if (!ReadBlock(0UL, sbuf)) return false;
         byte* sb = sbuf + 1024;
         if (SbMagic(sb) != 0xEF53) return false;
+        byte* gdt = stackalloc byte[BlockSize];
+        if (!ReadBlock(1UL, gdt)) return false;
+#endif
         _inodeSize = SbInodeSize(sb);
         _inodesPerGroup = SbInodesPerGroup(sb);
         _blocksPerGroup = SbBlocksPerGroup(sb);
         uint blocks = SbBlocksCount(sb);
         _groupCount = (blocks + _blocksPerGroup - 1) / _blocksPerGroup;
         if (_groupCount == 0) _groupCount = 1;
-        byte* gdt = stackalloc byte[BlockSize];
-        if (!ReadBlock(1UL, gdt)) return false;
         _blkBitmapBlock = GdBlockBitmap(gdt, 0);
         _inoBitmapBlock = GdInodeBitmap(gdt, 0);
         _inoTableBlock = GdInodeTable(gdt, 0);
@@ -696,13 +723,30 @@ internal static unsafe class Ext4
     public static unsafe bool ReadFileAll(uint ino, byte* dst, int capacity, out int outLen)
     {
         outLen = 0;
+#if DIAGNOSTICS
+        if (dst == null || capacity < 0) { Vga.WriteLine("ReadFileAll: bad args"); return false; }
+        if (!_mounted && !Mount()) { Vga.WriteLine("ReadFileAll: mount fail"); return false; }
+        Vga.WriteLine("ReadFileAll: START");
+#else
         if (dst == null || capacity < 0) return false;
         if (!_mounted && !Mount()) return false;
+#endif
         // use Type logic by reading size
         byte* inode = stackalloc byte[256];
+#if DIAGNOSTICS
+        if (!ReadInode(ino, inode)) { Vga.WriteLine("ReadFileAll: ReadInode fail"); return false; }
+        Vga.Write("ReadFileAll: mode="); Vga.WriteHex(InodeGetMode(inode)); Vga.WriteLine("");
+        if (!IsReg(InodeGetMode(inode))) { Vga.WriteLine("ReadFileAll: not reg"); return false; }
+#else
         if (!ReadInode(ino, inode)) return false;
         if (!IsReg(InodeGetMode(inode))) return false;
+#endif
         uint sz = InodeGetSize(inode);
+#if DIAGNOSTICS
+        Vga.Write("ReadFileAll: sz="); Vga.WriteDec(sz); Vga.Write(" ");
+        uint bnum0 = InodeGetBlock(inode, 0);
+        Vga.Write("bnum0="); Vga.WriteDec(bnum0); Vga.WriteLine("");
+#endif
         if (sz > (uint)capacity) sz = (uint)capacity;
         byte* blk = stackalloc byte[BlockSize];
         ulong off = 0;
@@ -722,6 +766,9 @@ internal static unsafe class Ext4
             }
             off += (ulong)take;
         }
+#if DIAGNOSTICS
+        Vga.Write("ReadFileAll: END outLen="); Vga.WriteDec((uint)outLen); Vga.WriteLine("");
+#endif
         return true;
     }
 

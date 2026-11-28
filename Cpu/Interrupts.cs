@@ -142,6 +142,10 @@ internal static unsafe class Interrupts
         if (vector == Layout.TimerVector) // IRQ0: PIT heartbeat (100 Hz)
         {
             Pit.Tick();
+            // Requeue due IPC retries. Safe in IRQ context: AdvanceRetries does
+            // not allocate or take a lock, and a non-blocking IPC syscall runs
+            // with IF=0 so it cannot interleave with this handler (single core).
+            Ipc.AdvanceRetries(Pit.Ticks);
             Eoi(0);                    // EOI before switching: the PIC may deliver
             Scheduler.Preempt();       // the next tick while another task runs
             return;

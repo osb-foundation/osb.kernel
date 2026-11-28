@@ -99,7 +99,7 @@ internal static class IpcLimits
 internal unsafe struct IpcTopic
 {
     public uint Generation;          // 0 = free slot
-    public uint OwnerPid;            // 0 = system / Kernel-owned (D20)
+    public ulong OwnerPid;            // 0 = system / Kernel-owned (D20)
     public uint Flags;               // bit0 = system topic
     public uint SubCount;            // active subscriptions
     public fixed byte Name[IpcLimits.MaxNameBytes + 1];
@@ -108,7 +108,7 @@ internal unsafe struct IpcTopic
 internal unsafe struct IpcSubscription
 {
     public uint Generation;          // 0 = free slot
-    public uint Pid;                 // subscriber (Kernel-derived)
+    public ulong Pid;                 // subscriber (Kernel-derived)
     public uint TopicIndex;          // index into _topics
     public int QueueCount;           // deliveries in Queued
     public int InFlight;             // deliveries in InFlight
@@ -128,7 +128,7 @@ internal unsafe struct IpcMessage
 internal unsafe struct IpcDelivery
 {
     public uint Generation;          // 0 = free slot
-    public uint Pid;                 // subscriber owner
+    public ulong Pid;                 // subscriber owner
     public uint TopicIndex;
     public uint MessageIndex;        // index into _messages
     public uint Order;               // FIFO order (commit order)
@@ -165,6 +165,7 @@ internal static unsafe partial class Ipc
     private static long _payloadBytes;   // total live payload bytes
     private static int _liveMessages;
     private static int _liveDeliveries;  // active (Queued+InFlight+RetryPending)
+    private static int _retryPending;    // deliveries in RetryPending (timer fast-path)
 
     public static bool Initialized { get; private set; }
 
@@ -184,6 +185,7 @@ internal static unsafe partial class Ipc
         _payloadBytes = 0;
         _liveMessages = 0;
         _liveDeliveries = 0;
+        _retryPending = 0;
         Initialized = false;
     }
 
@@ -233,7 +235,7 @@ internal static unsafe partial class Ipc
         return true;
     }
 
-    private static int FindSub(uint pid, uint topicIndex)
+    private static int FindSub(ulong pid, uint topicIndex)
     {
         for (int i = 0; i < _subCount; i++)
             if (_subs[i].Generation != 0 && _subs[i].Pid == pid && _subs[i].TopicIndex == topicIndex)

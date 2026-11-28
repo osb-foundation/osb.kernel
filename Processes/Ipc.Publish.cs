@@ -21,7 +21,7 @@ internal static unsafe partial class Ipc
     // Publish payload to every eligible subscriber of a topic.
     // Returns Ok + MessageId, or QueueFull (no partial fan-out), Enoent,
     // Eacces, Einval, Efault, Enomem.
-    public static IpcStatus Publish(uint pid, IpcHandle handle, byte* payload, int len, out ulong messageId)
+    public static IpcStatus Publish(ulong pid, IpcHandle handle, byte* payload, int len, out ulong messageId)
     {
         messageId = 0;
 

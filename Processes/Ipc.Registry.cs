@@ -13,7 +13,7 @@ internal static unsafe partial class Ipc
 {
     // Create a topic. System topics (Flags bit0) may only be created by the
     // Kernel (pid 0). Dynamic topics are owned by the caller's actual PID (D21).
-    public static IpcStatus CreateTopic(uint pid, byte* name, int nameLen, bool system, out IpcHandle handle)
+    public static IpcStatus CreateTopic(ulong pid, byte* name, int nameLen, bool system, out IpcHandle handle)
     {
         handle = default;
         if (!ValidateName(name, nameLen)) return IpcStatus.Einval;
@@ -29,7 +29,7 @@ internal static unsafe partial class Ipc
         else if (idx >= _topicCount) _topicCount = idx + 1;
 
         _topics[idx].Generation = NextGen(ref _topicGen);
-        _topics[idx].OwnerPid = system ? 0u : pid;
+        _topics[idx].OwnerPid = system ? 0UL : pid;
         _topics[idx].Flags = system ? SystemFlag : 0u;
         _topics[idx].SubCount = 0;
         ClearName(_topics[idx].Name);
@@ -43,7 +43,7 @@ internal static unsafe partial class Ipc
     // Destroy a topic and everything attached to it. System topics survive
     // (only the Kernel may destroy them); a dynamic topic is destroyed by its
     // owner (D22/D24).
-    public static IpcStatus DestroyTopic(uint pid, IpcHandle handle)
+    public static IpcStatus DestroyTopic(ulong pid, IpcHandle handle)
     {
         int idx;
         if (!ResolveTopic(handle, out idx)) return IpcStatus.Enoent;
@@ -70,7 +70,7 @@ internal static unsafe partial class Ipc
 
     // Subscribe is idempotent per (PID, Topic) (D25/D26): a repeat returns Ok
     // and creates no second queue.
-    public static IpcStatus Subscribe(uint pid, IpcHandle handle)
+    public static IpcStatus Subscribe(ulong pid, IpcHandle handle)
     {
         int t;
         if (!ResolveTopic(handle, out t)) return IpcStatus.Enoent;
@@ -98,7 +98,7 @@ internal static unsafe partial class Ipc
     }
 
     // Unsubscribe removes the caller's subscription and cancels its deliveries.
-    public static IpcStatus Unsubscribe(uint pid, IpcHandle handle)
+    public static IpcStatus Unsubscribe(ulong pid, IpcHandle handle)
     {
         int t;
         if (!ResolveTopic(handle, out t)) return IpcStatus.Enoent;
@@ -111,7 +111,7 @@ internal static unsafe partial class Ipc
     // Remove a subscription slot and cancel all its live deliveries.
     private static void CancelSubscriptionLocked(int s)
     {
-        uint pid = _subs[s].Pid;
+        ulong pid = _subs[s].Pid;
         uint topicIndex = _subs[s].TopicIndex;
         for (int d = 0; d < _deliveryCount; d++)
         {

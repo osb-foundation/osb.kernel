@@ -19,7 +19,7 @@ internal static unsafe class IpcTests
         else { failures++; Console.WriteLine($"FAIL: {name}"); }
     }
 
-    private static IpcHandle MakeTopic(uint pid, string name, bool system = false)
+    private static IpcHandle MakeTopic(ulong pid, string name, bool system = false)
     {
         byte* buf = stackalloc byte[32];
         for (int i = 0; i < 32; i++) buf[i] = 0;
@@ -30,7 +30,7 @@ internal static unsafe class IpcTests
         return h;
     }
 
-    private static IpcStatus PublishBytes(uint pid, IpcHandle topic, int len, out ulong mid)
+    private static IpcStatus PublishBytes(ulong pid, IpcHandle topic, int len, out ulong mid)
     {
         byte[] payload = new byte[len];
         for (int i = 0; i < len; i++) payload[i] = (byte)(i & 0xFF);
@@ -38,7 +38,7 @@ internal static unsafe class IpcTests
             return Ipc.Publish(pid, topic, pp, len, out mid);
     }
 
-    private static IpcStatus ReceiveInto(uint pid, IpcHandle topic, byte[] dest, out IpcDeliveryView view)
+    private static IpcStatus ReceiveInto(ulong pid, IpcHandle topic, byte[] dest, out IpcDeliveryView view)
     {
         fixed (byte* dp = dest)
             return Ipc.Receive(pid, topic, dp, dest.Length, out view);
@@ -52,9 +52,9 @@ internal static unsafe class IpcTests
         Ipc.TestOnly_Reset(); Kernel.ResetAlloc();
         IpcHandle sys = MakeTopic(0, "SYS", system: true);
         IpcHandle dyn = MakeTopic(7, "DYN");
-        Check(Ipc.TestOnly_Topic(0, out uint sOwner, out uint sFlags, out _, out uint sGen) && sOwner == 0 && (sFlags & 1) != 0 && sGen != 0,
+        Check(Ipc.TestOnly_Topic(0, out ulong sOwner, out uint sFlags, out _, out uint sGen) && sOwner == 0 && (sFlags & 1) != 0 && sGen != 0,
             "A1: system topic owned by Kernel (pid 0), system flag set");
-        Check(Ipc.TestOnly_Topic(1, out uint dOwner, out _, out _, out _) && dOwner == 7,
+        Check(Ipc.TestOnly_Topic(1, out ulong dOwner, out _, out _, out _) && dOwner == 7,
             "A2: dynamic topic owned by creator's actual pid (7)");
         // Ring 3 cannot create a system topic (D20).
         byte* nm = stackalloc byte[8]; nm[0] = (byte)'X'; nm[1] = 0;
@@ -165,6 +165,7 @@ internal static unsafe class IpcTests
         Check(ReceiveInto(2, ti, buf, out _) == IpcStatus.Eagain, "I14: no redelivery after terminal");
         Ipc.TestOnly_Counts(out _, out _, out _, out _, out long pbI, out int lmI, out int ldI);
         Check(pbI == 0 && lmI == 0 && ldI == 0, "I15: terminal released payload + message + active delivery accounting");
+        Check(Ipc.AdvanceRetries(1000) == 0, "I16: no retry pending after terminal (timer fast-path returns 0)");
 
         // ==== J. Process termination cleanup ====
         Ipc.TestOnly_Reset(); Kernel.ResetAlloc();

@@ -264,6 +264,11 @@ t.NameLen = n;
     public static void Release(int slot)
     {
         if (slot <= Console) return;
+        // IPC cleanup first: cancel this process's deliveries, remove its
+        // subscriptions, and destroy its dynamic topics. Runs before the
+        // address space is freed and while the PID is still recorded. No IPC
+        // state survives a terminated process (R3/D22/D24).
+        Ipc.OnProcessExit(_tasks.pid[slot]);
         AddressSpace.Release(_tasks.ublock[slot], _tasks.ptphys[slot]);
         // Reclaim additional user frames (MEMGROW blocks) by their recorded
         // physical bases and reset the per-slot accounting (O8.12 M1).

@@ -19,7 +19,7 @@ internal static unsafe partial class Ipc
 {
     // Dequeue one available delivery for (pid, topic) and copy its payload.
     // Non-blocking. Does not ACK.
-    public static IpcStatus Receive(uint pid, IpcHandle handle, byte* dest, int cap, out IpcDeliveryView view)
+    public static IpcStatus Receive(ulong pid, IpcHandle handle, byte* dest, int cap, out IpcDeliveryView view)
     {
         view = default;
 
@@ -59,7 +59,7 @@ internal static unsafe partial class Ipc
     }
 
     // Explicitly acknowledge an in-flight delivery owned by pid.
-    public static IpcStatus Ack(uint pid, IpcHandle handle)
+    public static IpcStatus Ack(ulong pid, IpcHandle handle)
     {
         int d;
         if (!ResolveDelivery(handle, out d)) return IpcStatus.Enoent;
@@ -72,7 +72,7 @@ internal static unsafe partial class Ipc
     // Record a failed attempt. transient=true retries (up to MaxAttempts);
     // otherwise (or when attempts are exhausted) the delivery is terminal.
     // nowTicks is the current tick source (the timer hook is deferred, Phase 1).
-    public static IpcStatus FailDelivery(uint pid, IpcHandle handle, bool transient, ulong nowTicks)
+    public static IpcStatus FailDelivery(ulong pid, IpcHandle handle, bool transient, ulong nowTicks)
     {
         int d;
         if (!ResolveDelivery(handle, out d)) return IpcStatus.Enoent;
@@ -86,6 +86,7 @@ internal static unsafe partial class Ipc
             if (s >= 0) { _subs[s].InFlight--; _subs[s].RetryPending++; }
             _deliveries[d].State = (int)IpcDeliveryState.RetryPending;
             _deliveries[d].NextRetryTick = nowTicks + IpcLimits.RetryBaseTicks * (ulong)_deliveries[d].Attempts;
+            _retryPending++;
             return IpcStatus.Ok;
         }
 
@@ -101,6 +102,7 @@ internal static unsafe partial class Ipc
     // Phase 1 (no callback timer exists); a future Scheduler hook calls this.
     public static int AdvanceRetries(ulong nowTicks)
     {
+        if (_retryPending == 0) return 0;   // fast path: nothing waiting
         int moved = 0;
         for (int d = 0; d < _deliveryCount; d++)
         {
@@ -110,6 +112,7 @@ internal static unsafe partial class Ipc
             int s = FindSub(_deliveries[d].Pid, _deliveries[d].TopicIndex);
             if (s >= 0 && _subs[s].RetryPending > 0) { _subs[s].RetryPending--; _subs[s].QueueCount++; }
             _deliveries[d].State = (int)IpcDeliveryState.Queued;
+            _retryPending--;
             moved++;
         }
         return moved;
@@ -125,7 +128,7 @@ internal static unsafe partial class Ipc
             {
                 case (int)IpcDeliveryState.Queued: if (_subs[s].QueueCount > 0) _subs[s].QueueCount--; break;
                 case (int)IpcDeliveryState.InFlight: if (_subs[s].InFlight > 0) _subs[s].InFlight--; break;
-                case (int)IpcDeliveryState.RetryPending: if (_subs[s].RetryPending > 0) _subs[s].RetryPending--; break;
+                case (int)IpcDeliveryState.RetryPending: if (_subs[s].RetryPending > 0) _subs[s].RetryPending--; _retryPending--; break;
             }
         }
         ReleaseMessageRef(d);

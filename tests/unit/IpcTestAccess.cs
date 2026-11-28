@@ -27,7 +27,7 @@ internal static unsafe partial class Ipc
         liveDeliveries = _liveDeliveries;
     }
 
-    public static bool TestOnly_Topic(int index, out uint ownerPid, out uint flags, out uint subCount, out uint generation)
+    public static bool TestOnly_Topic(int index, out ulong ownerPid, out uint flags, out uint subCount, out uint generation)
     {
         ownerPid = flags = subCount = generation = 0;
         if (index < 0 || index >= _topicCount) return false;
@@ -50,7 +50,7 @@ internal static unsafe partial class Ipc
         return n;
     }
 
-    public static bool TestOnly_Sub(int index, out uint pid, out uint topicIndex, out int q,
+    public static bool TestOnly_Sub(int index, out ulong pid, out uint topicIndex, out int q,
         out int inFlight, out int retry, out int capacity, out uint generation)
     {
         pid = topicIndex = generation = 0;
@@ -66,12 +66,12 @@ internal static unsafe partial class Ipc
         return true;
     }
 
-    public static int TestOnly_FindSub(uint pid, uint topicIndex)
+    public static int TestOnly_FindSub(ulong pid, uint topicIndex)
     {
         return FindSub(pid, topicIndex);
     }
 
-    public static bool TestOnly_Delivery(int index, out uint pid, out uint topicIndex, out uint messageIndex,
+    public static bool TestOnly_Delivery(int index, out ulong pid, out uint topicIndex, out uint messageIndex,
         out int state, out int attempts, out uint generation)
     {
         pid = topicIndex = messageIndex = generation = 0;
@@ -86,7 +86,7 @@ internal static unsafe partial class Ipc
         return true;
     }
 
-    public static int TestOnly_FindDelivery(uint pid, uint topicIndex, int state)
+    public static int TestOnly_FindDelivery(ulong pid, uint topicIndex, int state)
     {
         for (int d = 0; d < _deliveryCount; d++)
         {

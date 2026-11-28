@@ -11,7 +11,7 @@ namespace Osb.Kernel.Processes;
 internal static unsafe partial class Ipc
 {
     // Release every IPC resource associated with a terminating process.
-    public static void OnProcessExit(uint pid)
+    public static void OnProcessExit(ulong pid)
     {
         // 1. Cancel deliveries where this process is the subscriber.
         for (int d = 0; d < _deliveryCount; d++)

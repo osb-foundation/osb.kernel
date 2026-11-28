@@ -210,6 +210,28 @@ internal static unsafe class IpcTests
         Ipc.TestOnly_Counts(out _, out _, out _, out _, out long pbL2, out int lmL2, out int ldL2);
         Check(pbL2 == 0 && lmL2 == 0 && ldL2 == 0, "L4: all resources reclaimed after cleanup");
 
+        // ==== M. Handle codec + ABI error-value mapping (v10 contract) ====
+        // The u64 handle is (generation<<32)|index; the ABI error space is the
+        // negative IpcStatus values the syscall layer returns in RAX.
+        Check(new IpcHandle(0, 0).IsNone, "M1: generation 0 is the none handle");
+        Check(!new IpcHandle(0, 1).IsNone, "M2: generation 1 is a live handle");
+        ulong[] idxs = { 0u, 1u, 7u, 255u, 65535u, 4294967295u };
+        ulong[] gens = { 1u, 2u, 255u, 65535u, 4294967295u };
+        bool codecOk = true;
+        for (int a = 0; a < idxs.Length; a++)
+            for (int b = 0; b < gens.Length; b++)
+            {
+                var h = new IpcHandle((uint)idxs[a], (uint)gens[b]);
+                var back = IpcHandle.FromU64(h.ToU64());
+                if (back.Index != h.Index || back.Generation != h.Generation) codecOk = false;
+            }
+        Check(codecOk, "M3: ToU64/FromU64 round-trips index+generation");
+        Check(new IpcHandle(3, 9).ToU64() == ((ulong)9 << 32 | 3), "M4: handle packs generation high, index low");
+        Check((int)IpcStatus.Ok == 0 && (int)IpcStatus.Efault == -1 && (int)IpcStatus.Enosys == -2
+            && (int)IpcStatus.Eacces == -3 && (int)IpcStatus.Enoent == -4 && (int)IpcStatus.Einval == -5
+            && (int)IpcStatus.Enomem == -6 && (int)IpcStatus.Eintr == -7 && (int)IpcStatus.Ebadf == -8
+            && (int)IpcStatus.QueueFull == -9 && (int)IpcStatus.Eagain == -10, "M5: IpcStatus values match the v10 ABI error space");
+
         Console.WriteLine();
         if (failures == 0) { Console.WriteLine("IPC: ALL TESTS PASSED"); return 0; }
         Console.WriteLine($"IPC: {failures} TEST(S) FAILED");

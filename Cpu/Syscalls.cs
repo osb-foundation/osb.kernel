@@ -14,12 +14,13 @@ internal static unsafe partial class Syscalls
 {
     // ABI version reported by GETABI (AH=82h). Bump when this table or its
     // conventions change incompatibly; osbkt checks it at startup
-    // (osbkt/docs/ABI.md). v7: console (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR,
+    // (osbkt/docs/ABI.md). v10 (Card 3.1, phase 3): non-blocking topic IPC
+    // (83h-8Ah). v7: console (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR,
     // 72h DATETIME); WAIT interruptible (-7 EINTR); KILL/SETFG uid-gated.
     // v6 (slice 6): console (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR, 72h DATETIME);
     // WAIT interruptible (-7 EINTR); KILL/SETFG uid-gated. v5 (phase 3, slice 3):
     // environment (63h/64h). v4 (phase 1c): session identity (65h-69h).
-    public const int AbiVersion = 9;
+    public const int AbiVersion = 10;
 
     public static void Handle(ulong* frame)
     {
@@ -88,6 +89,9 @@ internal static unsafe partial class Syscalls
         if (func == 0x80) { HandleSpawn(frame); return; }
         if (func == 0x81) { HandleWait(frame); return; }
         if (func == 0x82) { HandleGetAbi(frame); return; }
+
+        // IPC (83h-8Ah) lives in its own partial.
+        if (func >= 0x83 && func <= 0x8A) { HandleIpc((int)func, frame); return; }
 
         // Input
         if (func == 0x6E) { HandleGetChar(frame); return; }

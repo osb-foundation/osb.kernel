@@ -458,7 +458,7 @@ stale Topic IDs return `ENOENT` (Section 11.5, Q-H1).
 ## 8. Topic ownership, ACLs, authorization, default-deny
 
 - **[DECIDED D21]** Dynamic topic ownership = creator's actual PID (Kernel-derived).
-- **[PROPOSED] Security model:**
+- **[RATIFIED — Card 3.1 Phase 3A.1; implementation BLOCKED on Q-A1] Security model:**
   - **Default-deny.** A subject may `Publish`, `Subscribe`, or `Manage` a topic only
     if an explicit ACL entry grants it. No implicit "creator can do anything" beyond
     the ownership operations in Q-A3.
@@ -472,6 +472,17 @@ stale Topic IDs return `ENOENT` (Section 11.5, Q-H1).
     but are still subject to topic existence checks.
 - **[OPEN Q-A1]** ACL representation (per-topic table vs capability list) is not
   fixed; recommendation in Section 13.
+- **Status (Phase 3A.1, verified against source):** The model above is **ratified**
+  but **not implemented**. There is **no ACL representation** in the kernel — no
+  per-topic grant table and no grant/revoke API exist (`Processes/Ipc*.cs` define
+  only `OwnerPid`/`Flags`; a code search for `Acl`/`Grant`/`Revoke`/`Permission`
+  returns nothing) — so explicit `Subscribe` grants **cannot be represented
+  safely** yet (Q-A1 still open). Consequently the current v10 implementation does
+  **not** enforce default-deny for `Subscribe`: any process may subscribe to any
+  existing topic. Owner/kernel authorization **is** enforced for `Publish`
+  (`Ipc.Publish.cs:32-33`) and `Destroy` (`Ipc.Registry.cs:51-52`). The open
+  `Subscribe` is a **known deviation, not an approved grant**; per the milestone
+  gate no partial ACL was invented. **Blocked pending Q-A1/A2/A3.**
 
 Authorization is evaluated in the broker **using the caller's Kernel-derived uid/gid**
 (Section 4.10), never a Ring 3-supplied identity.
